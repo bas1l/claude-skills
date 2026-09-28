@@ -1,0 +1,9 @@
+{
+  "_comment": "Knobs for the TL;NR gate. Edited live - both hooks re-read this file on every invocation. Delete it to fall back to the same defaults. Add \"ask_phrases\": [\"tell me\", ...] here only to OVERRIDE the wordings in tldr_conf.py; leaving it out keeps that list as the single source of truth.",
+  "require_ask_bullet": true,
+  "min_chars": 1024,
+  "max_bullets": 3,
+  "max_bullet_words": 25,
+  "max_ask_words": 35,
+  "max_retries": 2
+}
