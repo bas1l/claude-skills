@@ -1,6 +1,6 @@
 ---
 name: wrap-up
-description: "Analyse branch cascade, commit outstanding work, and merge feature branches back to dev — step-by-step or fully automatic with /wrap-up auto"
+description: "Analyse branch cascade, commit outstanding work, fold intermediate feature branches together locally, and send each dev-rooted branch up as a GitHub PR — step-by-step or fully automatic with /wrap-up auto"
 allowed-tools:
   - Bash
   - Read
@@ -8,6 +8,7 @@ allowed-tools:
   - Write
   - Glob
   - Grep
+  - Agent
   - AskUserQuestion
 ---
 
@@ -20,9 +21,35 @@ order.
 **Trigger:** `/wrap-up [auto]`
 
 **Arguments:**
-- No arguments → **analysis only** (Phase 1, then stop — no commits or merges)
-- `run`  → **step-by-step mode** (all phases; confirm after each phase and each merge)
-- `auto` → **automatic mode** (all phases; skip confirmations, stop only on errors/conflicts)
+- No arguments → **analysis only** (Phase 1, then stop — no commits, merges or PRs)
+- `run`  → **step-by-step mode** (all phases; confirm after each phase, each merge, and each PR)
+- `auto` → **automatic mode** (all phases; skip confirmations — including the PR approval gate — and stop only on errors/conflicts)
+- `no-pr` → suppress Phase 3b entirely; every cascade edge becomes a local merge (the pre-PR behaviour)
+
+---
+
+## How branches reach `dev`
+
+A cascade has two kinds of edge, and they are handled differently:
+
+| Edge | Handling | Why |
+|------|----------|-----|
+| `feature/child` → `feature/parent` | **Local merge**, `--no-ff` | The parent is itself about to move. A PR into a branch that will be merged and deleted leaves a stacked PR needing manual retargeting on GitHub. |
+| `feature/x` → `dev` | **GitHub PR** via `plan-pr` | This is the branch that actually lands on the integration line, so it is the one that gets reviewed. |
+
+```
+dev
+ ├─ feature/a  ................  PR → dev
+ └─ feature/b  ................  PR → dev
+     └─ feature/c  ...........  local merge → feature/b
+
+Phase 3a folds c into b. Phase 3b then opens two PRs: a → dev, b → dev.
+Nothing needs retargeting.
+```
+
+Consequence: **Phase 3b never deletes a branch and never merges into `dev`.**
+`dev` is only ever written by GitHub merging the PR. Cleaning up afterwards is
+`/plan-finish <plan>`'s sync mode.
 
 ---
 
@@ -102,6 +129,44 @@ git log --oneline <base-branch>..<feature-branch>
 
 If `<base-branch>` doesn't exist locally, skip and note "base missing."
 
+### Step 6b: Probe PR state per branch
+
+**This step is what keeps `wrap-up` from colliding with `plan-pr`.** Without it,
+a branch GitHub has already merged would be merged locally a second time, and a
+branch with an open PR would be merged behind that PR's back.
+
+First establish whether GitHub is reachable at all:
+
+```bash
+gh auth status && git remote get-url origin
+```
+
+If `gh` is missing, unauthenticated, or `origin` is not a GitHub URL → record
+**`no-github`**, skip the per-branch probe, and treat every edge as a local merge
+(the pre-PR behaviour). Say so in the report; do not fail.
+
+Otherwise, for each feature branch in the cascade:
+
+```bash
+gh pr view <branch> --json number,state,url,mergedAt 2>/dev/null
+```
+
+Record one state per branch and the resulting **edge kind**:
+
+| PR state | Edge → `dev` | Edge → feature parent |
+|----------|--------------|------------------------|
+| No PR | **pr** — open one in Phase 3b | **local** — merge as usual |
+| `OPEN` | **skip** — PR already awaiting review; nothing to do | **blocked** — see below |
+| `MERGED` | **sync** — pull `dev`, clean up, no merge | **blocked** |
+| `CLOSED`, unmerged | **ask** (step-by-step) / **blocked** (auto) | **blocked** |
+
+**`blocked`** means: a branch that has a PR of its own must not be quietly
+swallowed by a local merge into its parent — doing so would make the PR's diff
+meaningless. Report it and **exclude that subtree from the cascade**. Do not
+merge it, in either mode.
+
+Feed the edge kind into Step 5's cascade tree so Step 8 can display it.
+
 ### Step 7: Gather uncommitted files
 
 ```bash
@@ -155,12 +220,23 @@ Uncommitted Files:
     ?? .vscode/
     ?? comparison_report.json
 
-Merge Order (leaf → root):
+Phase 3a — Local merges (leaf → root):
   1. feature/batch-extractor-identity-format → feature/comparison-pipeline-outputs
   2. feature/comparison-pipeline-outputs → feature/persona-scb-field-alignment
-  3. feature/persona-scb-field-alignment → dev
-  4. feature/scb-raw-data-output → dev   (independent, any order)
+
+Phase 3b — Pull requests (dev-rooted):
+  3. feature/persona-scb-field-alignment → dev    PR (no existing PR)
+  4. feature/scb-raw-data-output         → dev    SKIP — PR #7 already open
+  5. feature/legacy-cleanup              → dev    SYNC — PR #5 merged, cleanup only
+
+Excluded from cascade:
+  (none)
 ```
+
+Each cascade edge is annotated with its kind from Step 6b: `local`, `pr`,
+`skip`, `sync`, `blocked`, or `ask`. If Step 6b recorded **`no-github`**, print
+`GitHub unreachable — every edge treated as a local merge` above the merge order
+and label every edge `local`.
 
 In **analysis-only mode** (no args): display the report and stop. No further
 prompts.
@@ -239,9 +315,15 @@ git stash push --include-untracked -m "wrap-up: auto-stash from <current-branch>
 
 Record that a stash was made (for final pop).
 
-### Step 12: Execute merges in cascade order
+### Step 12: Phase 3a — Fold the cascade (local edges)
 
-For each merge step in the cascade order (leaf → root):
+For each edge whose kind is **`local`**, in cascade order (leaf → root).
+
+Edges marked `pr`, `skip`, `sync` or `ask` are **not** handled here — they go to
+Step 13. Edges marked `blocked` are skipped entirely and reported.
+
+If the `no-pr` argument was given, every edge is `local` and this step handles
+the whole cascade, ending on `dev` exactly as it did before PRs existed.
 
 #### 12a. Mark plans as completed
 
@@ -322,7 +404,94 @@ Show:
 
 In auto mode: continue to next merge.
 
-### Step 13: Pop stash
+---
+
+### Step 13: Phase 3b — Open pull requests (dev-rooted edges)
+
+Runs after **all** of Phase 3a, so each dev-rooted branch already contains its
+folded children and its PR diff is complete. Skipped entirely if `no-pr` was
+given or Step 6b recorded `no-github`.
+
+Process dev-rooted branches **one at a time, serially.** Composing a PR reads
+`git log`/`git diff` against a checked-out branch, and all branches share one
+working tree — parallel compose agents would fight over `HEAD` and produce
+diffs for the wrong branch.
+
+For each dev-rooted branch, dispatch on its edge kind from Step 6b:
+
+#### Kind `skip` — a PR is already open
+
+Do nothing. Report:
+`feature/x → dev  SKIP — PR #<n> already open (<url>)`
+
+Do not push, do not re-compose, do not merge locally.
+
+#### Kind `sync` — the PR is already merged
+
+The work is on `dev` already. Do not merge, do not open a PR. Run
+`/plan-finish <plan-name>` — it detects the merged PR and performs exactly this
+cleanup (pull `dev`, mark plans completed there, push, delete the branch).
+
+In **auto** mode invoke it directly. In **step-by-step** mode ask first.
+
+#### Kind `ask` — a closed, unmerged PR exists
+
+- **Step-by-step:** `AskUserQuestion` — "Open a new PR", "Merge locally instead",
+  or "Skip this branch".
+- **Auto:** do **not** guess. Skip the branch and report it as needing a
+  decision. Reopening work that was deliberately closed is not something `auto`
+  authorizes.
+
+#### Kind `pr` — no PR exists yet
+
+1. **Checkout the branch:**
+   ```bash
+   git checkout <branch>
+   ```
+
+2. **Mark its plans completed and commit** — run Steps 12a and 12b against this
+   branch. The completion commit then rides *inside* the PR, so nothing is left
+   dangling on a branch that GitHub will merge later.
+
+3. **Compose** — dispatch a background Agent instructed to read
+   `~/.claude/skills/plan-pr/SKILL.md` (or the project-local copy if present) and
+   execute **Phases 0–3 in delegated `compose` mode**. Pass the branch, its plan
+   file path, and `dev` as the base. It must not push, must not run
+   `gh pr create`, and must not edit any repo file.
+
+   `Preflight: FAILED` → report the failed gate, skip this branch, continue to
+   the next one. One branch failing preflight must not abort the others.
+
+4. **Gate** — display the composed PR in full, then:
+   - **Step-by-step:** ask `yes / edit / no`. On no, skip this branch (its
+     completion commit stays on the branch; that is fine and reversible).
+   - **Auto:** print `auto mode — opening this PR without confirmation` and
+     proceed immediately. The display is a record, not a question.
+
+5. **Execute** — dispatch a second background Agent to read the same file and run
+   **Phases 4–6 in delegated `execute` mode**, carrying the matching
+   authorization statement:
+   - Step-by-step: `Approval granted: the user answered yes at the orchestrator's gate.`
+   - Auto: `Approval granted: auto mode — standing authorization, no gate was run.`
+
+   All of `plan-pr`'s hard rules apply: never force-push, never merge or delete a
+   branch, stop and report on a rejected push.
+
+6. **Do not delete the branch.** The PR is open, not merged — the branch is the
+   PR. Deleting it would close the PR. Cleanup happens later via
+   `/plan-finish <plan>` once GitHub has merged it.
+
+#### After Phase 3b
+
+Return to `dev`:
+
+```bash
+git checkout dev
+```
+
+`dev` is intentionally unchanged by Phase 3b — nothing was merged into it.
+
+### Step 14: Pop stash
 
 Only if a stash was made in Step 11:
 
@@ -334,30 +503,45 @@ git stash pop
 - Conflict → warn: "Stash pop had conflicts. Resolve manually, then run
   `git stash drop`." Do NOT auto-resolve.
 
-### Step 14: Final report
+### Step 15: Final report
 
 ```
 ═══════════════════════════════════════════
   WRAP-UP COMPLETE
 ═══════════════════════════════════════════
 
-Merges completed:
+Local merges (Phase 3a):
   ✓ feature/batch-extractor-identity-format → feature/comparison-pipeline-outputs
-  ✓ feature/comparison-pipeline-outputs → feature/persona-scb-field-alignment
-  ✓ feature/persona-scb-field-alignment → dev
-  ✓ feature/scb-raw-data-output → dev
+  ✓ feature/comparison-pipeline-outputs     → feature/persona-scb-field-alignment
 
-Plans completed: 4
+Pull requests (Phase 3b):
+  ✓ feature/persona-scb-field-alignment → dev   PR #12 opened  <url>
+  – feature/scb-raw-data-output         → dev   skipped, PR #7 already open
+  ✓ feature/legacy-cleanup              → dev   synced (PR #5 merged), branch deleted
+
+Needing a decision:
+  - feature/abandoned-idea — PR #9 closed unmerged; re-run with `run` to choose
+
+Plans completed: 3
   - Batch Extractor — Identity Format Mismatch
   - Comparison Pipeline — Outputs
   - Persona Pipeline Field Expansion (SCB Alignment)
-  - SCB Raw Data Output
 
-Current branch: dev
+Branches still open (awaiting PR review — do NOT delete):
+  - feature/persona-scb-field-alignment
+  - feature/scb-raw-data-output
+
+Current branch: dev   (unchanged — PRs merge on GitHub)
 Working tree: clean / N uncommitted files
+
+Next: review and merge the PRs on GitHub, then run
+      /plan-finish <plan-name>   for each merged one.
 ```
 
 Then run `git status` to show the final state.
+
+Report honestly: a branch whose PR failed preflight, was skipped, or needs a
+decision is listed as such. Never present a skipped branch as completed.
 
 ---
 
@@ -375,7 +559,17 @@ Then run `git status` to show the final state.
 | Uncommitted files exist at merge time | Require clean tree; stash if needed |
 | Merge conflict | Report conflicting files, stop (no auto-resolve) |
 | Already on `dev` | Still run analysis; skip merge if no cascade exists |
-| `auto` argument | Skip all confirmations; stop only on errors/conflicts |
+| `auto` argument | Skip all confirmations **including the PR approval gate**; stop only on errors/conflicts |
+| `no-pr` argument | Phase 3b skipped; whole cascade merges locally into `dev` (pre-PR behaviour) |
+| `gh` missing / unauthenticated / non-GitHub remote | Record `no-github`, treat every edge as local, note it in the report — do not fail |
+| Dev-rooted branch with **open** PR | Skip it. Never merge locally behind an open PR |
+| Dev-rooted branch with **merged** PR | Sync via `/plan-finish` (pull, bookkeep, delete). No merge, no new PR |
+| Dev-rooted branch with **closed unmerged** PR | Step-by-step: ask. Auto: skip and flag — never re-open closed work unattended |
+| **Intermediate** branch that has its own PR | `blocked` — exclude that subtree; folding it into its parent would void the PR's diff |
+| Phase 3b compose returns `Preflight: FAILED` | Report the gate, skip that branch, continue with the remaining ones |
+| Phase 3b + user answers "no" at the gate | Skip the branch; its completion commit stays on it (harmless, reversible) |
+| Phase 3b branch deletion | **Never.** The branch *is* the open PR; deleting it closes the PR |
+| `dev` after Phase 3b | Unchanged — PRs merge on GitHub, not locally |
 | No `run`/`auto` arg | Stop after Phase 1 report; never enter Phase 2 or Phase 3 |
 | Stash pop conflict | Warn user, stop |
 | `completed/` directory missing | Create it: `mkdir -p docs/development/plans/completed` |
@@ -386,8 +580,13 @@ Then run `git status` to show the final state.
 
 ## Important Constraints
 
-- **No remote operations** — no `git push`, no `git push --delete`. The user
-  handles remote sync separately (e.g., via `/publish-main`).
+- **Remote operations are confined to Phase 3b** — and there, to exactly what
+  `plan-pr` does: `git push -u origin <branch>` and `gh pr create`. Phases 1, 2
+  and 3a remain entirely local. **Never** `git push origin dev`, never
+  `git push --delete`, never force-push. `dev` reaches `origin` by GitHub
+  merging a PR, or via `/publish-main`.
+- **Never merge into `dev` locally** unless `no-pr` was given or GitHub is
+  unreachable. That is the PR's job, and doing both duplicates the merge.
 - **Authorship** — All commits by Basil Duvernoy only. Never add `Co-Authored-By`
   trailers.
 - **Merge strategy** — always `--no-ff` unless user explicitly says "fast-forward".
@@ -397,7 +596,8 @@ Then run `git status` to show the final state.
 - **Destructive operations** — stash and branch deletion are part of this skill's
   contract. In step-by-step mode, each gets individual confirmation. In auto mode,
   they proceed automatically but only via safe commands (`-d` not `-D`, stash
-  with message).
+  with message). **Branch deletion never applies to a branch with an open PR** —
+  deleting it would close the PR.
 - **Dev-rooted only** — the cascade tree only includes branches that chain back
   to `dev`. Branches rooted at `main` or disconnected branches are listed
   separately but not included in the merge cascade.

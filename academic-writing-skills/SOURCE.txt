@@ -1,0 +1,19 @@
+Source repository: https://github.com/WenyuChiou/academic-writing-skills
+Path in repository: skills/academic-writing-skills/
+Commit: a13616bcde7bef28d0dc24c80da654b40a78f398 (commit date 2026-09-17)
+Imported: 2026-09-23
+Licence: MIT, Copyright (c) 2026 Wenyu Chiou (repository LICENSE copied beside this file)
+Files: copied unmodified from the commit above; only LICENSE and this SOURCE.txt were added.
+
+Screening before import (every file in this folder read in full):
+- No network calls: the Python scripts import only argparse, json, re, math, hashlib,
+  zipfile, tempfile, copy, collections, pathlib, typing, xml.etree. The only URLs are
+  OOXML/SVG XML namespace strings, which are never fetched.
+- No shell or subprocess execution, no eval/exec, no os.system.
+- File writes: init_manuscript_state.py writes one new JSON file at a path given on the
+  command line and refuses to overwrite; run_regression_tests.py writes only inside a
+  tempfile.TemporaryDirectory. All other scripts are read-only and print to stdout.
+- No instructions to send, upload or exfiltrate data; no prompt-injection text.
+- agents/openai.yaml is Codex/ChatGPT metadata and is ignored by Claude Code.
+- Contains lab-specific conditional content (Ethan-style overlay, Wenyu/Madan project
+  precedents, survey-paper-wcvx routing) that activates only when those projects are named.

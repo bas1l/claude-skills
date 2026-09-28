@@ -66,6 +66,8 @@ Read the full plan document. Parse and extract:
   - Files Modified (the file list under `**Files Modified:**`)
 - **Testing Plan** — items under the `## Testing Plan` section
 - **Documentation Plan** — items under the `## Documentation Plan` section
+- **Definitions** — term → meaning pairs under the `## Definitions` section (load-bearing terms the implementation must not silently reinterpret)
+- **Module Contracts** — the rows of the `### Architecture & Module Contracts` table (module · responsibility · inputs→outputs · must NOT know about)
 
 If any of these sections are missing, note it and skip the corresponding checks
 later.
@@ -114,6 +116,7 @@ Launch one **background Agent per phase** in scope. Each agent receives:
 - Phase number, title, goal, tasks, files-modified (verbatim from the plan)
 - The `changed_files` list from Step 4 (or note that file-read-only mode is active)
 - Out of Scope items (for scope creep detection)
+- The plan's **Definitions** and **Module Contracts**, plus the standing rules from the `_code-conventions` skill
 - Project conventions: CuPy must be imported before preprocessing packages
 
 Each agent performs the checks below and returns structured results.
@@ -172,6 +175,24 @@ For files changed (in `changed_files`) but not listed in this phase's Files
 Modified:
 - Cross-reference against Out of Scope items.
 - Flag potential scope violations.
+
+### 5f. Boundary & convention adherence (review at the seam)
+
+Architecture drift and hardcoding are this user's most frequent source of rework, so check them
+explicitly:
+- **Module boundaries:** for each row of the plan's Module Contracts, verify the implementation
+  respects it — especially the **"must NOT know about"** column. A module or base class that
+  references a concrete field, label, country, or path it was meant to be agnostic to →
+  **BOUNDARY-VIOLATION** (include file:line).
+- **Load-bearing terms:** verify behaviour matches the plan's `## Definitions`, not a reinterpretation
+  of the term → **TERM-DRIFT**.
+- **Conventions (`_code-conventions`):** flag hardcoded values/paths that belong in config, data baked
+  in instead of fetched from the source of truth, and one-file-many-concerns violations →
+  **CONVENTION-VIOLATION** (name the rule). The sanctioned exception is a labelled config block at the
+  top of a workflow `main()`.
+
+> 💡 For a visual current-vs-implemented comparison of the module boundaries, run `/arch-diff <plan>`
+> (optional; not automatic).
 
 ---
 
@@ -239,6 +260,11 @@ Call-Site Consistency:
 
 Scope Creep: None detected
 
+Boundaries & Conventions:
+  BOUNDARY-VIOLATION   src/base_mapper.py:33 — base class references country label (contract: must be agnostic)
+  CONVENTION-VIOLATION src/run.py:12 — hardcoded output path (belongs in config)
+  TERM-DRIFT           behaviour of "intact" differs from the plan's Definition
+
 --- Phase 2: <Title> ---
 [... same structure ...]
 
@@ -266,6 +292,7 @@ Files: A OK, B warning, C unlisted
 Call-site issues: D stale callers
 Code issues: E
 Scope creep: F
+Boundary/convention: J violations (boundary + convention + term-drift)
 Success criteria: G covered, H partial, I not covered
 ```
 

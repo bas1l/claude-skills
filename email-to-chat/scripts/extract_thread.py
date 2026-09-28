@@ -40,12 +40,28 @@ def load_message(path):
         except ImportError:
             sys.exit("extract_msg is required for .msg input: "
                      "python -m pip install extract-msg")
-        msg = extract_msg.Message(path)
-        try:
-            return msg.asEmailMessage()
-        except AttributeError:
-            sys.exit("extract_msg is too old for .asEmailMessage(): "
-                     "python -m pip install -U extract-msg")
+        # Outlook writes .msg files that declare one string encoding and then
+        # store bytes in another - a Swedish message advertising UTF-8 while
+        # holding cp1252 raises UnicodeDecodeError on the first body read. Retry
+        # with the encodings that actually occur before giving up, rather than
+        # letting one bad file abort a whole conversation.
+        last = None
+        for override in (None, "cp1252", "latin-1"):
+            try:
+                kwargs = {"overrideEncoding": override} if override else {}
+                msg = extract_msg.Message(path, **kwargs)
+                try:
+                    return msg.asEmailMessage()
+                except AttributeError:
+                    sys.exit("extract_msg is too old for .asEmailMessage(): "
+                             "python -m pip install -U extract-msg")
+            except UnicodeDecodeError as exc:
+                last = exc
+                continue
+        raise UnicodeDecodeError(last.encoding, last.object, last.start,
+                                 last.end,
+                                 "%s (tried cp1252 and latin-1 too)"
+                                 % last.reason)
     with open(path, "rb") as fh:
         return BytesParser(policy=policy.default).parse(fh)
 
@@ -214,10 +230,21 @@ def image_size(path):
     return None, None
 
 
-def save_attachments(msg, workdir):
+def save_attachments(msg, workdir, prefix="", used=None):
+    """
+    Write every attachment into <workdir>/images and return an inventory.
+
+    `prefix` is prepended to each saved filename, and `used` lets a caller share
+    one name-collision set across several messages. Stage 0 needs both: a
+    conversation export holds many messages that each call their inline figure
+    image001.png, and without a per-message prefix they would overwrite one
+    another. Stage 1 passes neither, so its behaviour is unchanged.
+    """
     img_dir = os.path.join(workdir, "images")
     os.makedirs(img_dir, exist_ok=True)
-    items, used = [], set()
+    items = []
+    if used is None:
+        used = set()
 
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
@@ -237,7 +264,7 @@ def save_attachments(msg, workdir):
             ext = {"image/jpeg": ".jpg", "image/png": ".png",
                    "image/gif": ".gif"}.get(ctype, ".bin")
             name = "part%02d%s" % (len(items) + 1, ext)
-        name = re.sub(r"[^\w.\-]", "_", os.path.basename(name))
+        name = prefix + re.sub(r"[^\w.\-]", "_", os.path.basename(name))
 
         stem, ext = os.path.splitext(name)
         n = 1

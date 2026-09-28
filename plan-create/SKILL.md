@@ -22,6 +22,12 @@ When this skill is invoked, you MUST follow these steps in order:
 ### Step 1: Research (do this FIRST)
 - Explore the codebase to understand existing patterns, similar features, and constraints
 - Check the knowledge base for relevant patterns (see Best Practices below)
+- **Read the pipeline / analytics engineering guides** in
+  `~/.claude/knowledge/data-pipeline-engineering/` (start with `README.md`). Use `01` to name
+  the system and `02`'s design checklist while decomposing the feature into
+  stages; consult `03` for any statistical/analytics code and `05` for
+  craftsmanship/maintainability. Reflect the applicable principles in the plan's
+  Technical Design section.
 - Identify dependencies with other systems
 - Consider alternatives and trade-offs
 
@@ -180,7 +186,15 @@ Measurable checkboxes that define "done":
 - [ ] Specific, measurable criterion 2
 - [ ] Specific, measurable criterion 3
 
-### 5. Technical Design
+### 5. Definitions & Terminology
+
+Pin down any term the plan's correctness depends on — concretely, not by principle. If a word like
+"intact", "realistic", "agnostic", or "clean" is load-bearing, define it in testable terms so
+implementation cannot drift on interpretation. Omit only when there are genuinely no such terms.
+
+- **[term]:** [concrete, testable meaning in this plan's context]
+
+### 6. Technical Design
 
 #### Approach
 - High-level description of chosen solution
@@ -193,13 +207,20 @@ Table comparing approaches:
 | Option A | [Pro] | [Con] | Chosen |
 | Option B | [Pro] | [Con] | Rejected |
 
-#### Architecture Changes
-- New modules or classes being created
-- Existing files that will be significantly modified
-- Integration points with existing code
-- Any architectural patterns being introduced
+#### Architecture Changes — Module Boundaries & Contracts
+Describe the structure as a *contract*, not a principle:
+- New modules or classes, each with a one-line **responsibility** and its **inputs → outputs**
+- For each, what it must **NOT** know about — the concrete form of "agnostic" / separation of concerns
+- Integration points and interfaces with existing code (name the signatures that change)
+- A directory tree or interface sketch when it helps
 
-### 6. Implementation Plan
+| Module / layer | Responsibility | Inputs → Outputs | Must NOT know about |
+|----------------|----------------|------------------|---------------------|
+| [module] | [one job] | [in → out] | [labels, paths, country, …] |
+
+> 💡 To see the proposed change as a color-coded before/after diagram, run `/arch-diff <plan>` once the contracts are drafted (optional; not automatic).
+
+### 7. Implementation Plan
 
 Break into logical phases with clear dependencies:
 
@@ -241,7 +262,7 @@ Break into logical phases with clear dependencies:
 
 **Dependencies:** Phase 2
 
-### 7. Testing Plan
+### 8. Testing Plan
 
 #### Unit Tests
 - [ ] Test case 1 — What is being tested and expected behavior
@@ -260,7 +281,7 @@ Break into logical phases with clear dependencies:
 - [ ] Edge case 1 — Unusual but valid input/state
 - [ ] Edge case 2 — Boundary condition testing
 
-### 8. Documentation Plan
+### 9. Documentation Plan
 
 - [ ] Update README.md with new commands/features
 - [ ] Update CLAUDE.md with architecture changes
@@ -269,7 +290,7 @@ Break into logical phases with clear dependencies:
 - [ ] Add changelog entry: `docs/changelogs/[feature].md`
 - [ ] Update inline code comments for complex logic
 
-### 9. Rollback Plan
+### 10. Rollback Plan
 
 How to safely revert if something goes wrong:
 
@@ -286,7 +307,7 @@ How to safely revert if something goes wrong:
    - Which files to restore
    - Database/state reset steps
 
-### 10. Risks and Mitigations
+### 11. Risks and Mitigations
 
 Identify potential blockers and how to handle them:
 
@@ -314,6 +335,12 @@ Identify potential blockers and how to handle them:
   **Alternatives Considered** and **Architecture Constraints** — before the
   plan is submitted for review.
 
+- **Read the pipeline-engineering guides** — Read `~/.claude/knowledge/data-pipeline-engineering/README.md`
+  and the relevant guides it indexes (`01` system classification, `02`
+  architecture patterns & checklist, `03` statistical/scientific software, `05`
+  code craftsmanship). Apply the checklists when shaping the plan, especially the
+  **Technical Design**, **Alternatives Considered**, and **Architecture
+  Constraints** sections.
 - **Explore the codebase** — Understand existing patterns, similar features, and constraints
 - **Identify dependencies** — What other systems does this integrate with?
 - **Consider alternatives** — Why is your chosen approach best? Document trade-offs
@@ -475,6 +502,14 @@ Use this template when creating a new plan:
 - [ ] [Measurable criterion 2]
 - [ ] [Measurable criterion 3]
 
+## Definitions
+
+<!-- Any term whose meaning the plan's correctness depends on. Define it concretely and testably,
+     NOT by principle. If a word like "intact", "realistic", "agnostic", or "clean" is load-bearing
+     here, pin it down before any code is written. Omit the section only if there are genuinely none. -->
+
+- **[term]**: [what it means here, in concrete/testable terms]
+
 ---
 
 ## Technical Design
@@ -490,12 +525,19 @@ Use this template when creating a new plan:
 | [Option A] | [Pro] | [Con] | Chosen |
 | [Option B] | [Pro] | [Con] | Rejected |
 
-### Architecture Changes
+### Architecture & Module Contracts
 
-[Describe any architectural changes, new modules, or modified interfaces]
+Define the structure as a *contract*, not a principle. For each new or significantly changed module,
+state its responsibility, its inputs → outputs, and — crucially — what it must **NOT** know about
+(the concrete form of "agnostic" / separation of concerns). This is the review surface: implementers
+build to it and `/plan-review` checks against it.
+
+| Module / layer | Responsibility | Inputs → Outputs | Must NOT know about |
+|----------------|----------------|------------------|---------------------|
+| [module] | [one job] | [in → out] | [labels, paths, country, …] |
 
 ```
-[Diagram or directory structure if helpful]
+[Directory tree / interface signatures if helpful]
 ```
 
 ---
