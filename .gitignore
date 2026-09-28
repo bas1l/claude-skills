@@ -3,3 +3,9 @@
 
 # Backup folders
 *backup*/
+
+# Python bytecode
+__pycache__/
+
+# Claude-managed sync of built-in skills (regenerated automatically)
+synced/
