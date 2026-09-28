@@ -1,0 +1,53 @@
+{
+  "_comment": "Hook block merged into ~/.claude/settings.json by install.ps1. Each event listed here REPLACES that event in settings.json; events not listed are left alone. Placeholders: {{PYTHON}} = python.exe, {{CLAUDE_DIR}} = ~/.claude (forward slashes).",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -Command \"(New-Object System.Media.SoundPlayer \\\"$env:windir\\Media\\Windows Proximity Notification.wav\\\").PlaySync()\"",
+            "timeout": 10,
+            "statusMessage": "Notification sound"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File {{CLAUDE_DIR}}/hooks/brainstorm-session-start.ps1",
+            "timeout": 10,
+            "statusMessage": "Offering to brainstorm"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_switch.py\"",
+            "timeout": 10,
+            "statusMessage": "TL;DR gate switch"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_gate.py\"",
+            "timeout": 10,
+            "statusMessage": "TL;DR gate"
+          }
+        ]
+      }
+    ]
+  }
+}
