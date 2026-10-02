@@ -15,12 +15,15 @@
                                        (copied, not linked: the hooks keep their
                                        state flags in that folder, and Windows
                                        symlinks need admin)
-      4. ~/.claude/settings.json    <- hook events from setup/settings.hooks.json,
-                                       with this machine's python.exe filled in
+      4. ~/.claude/settings.json    <- hook events and top-level settings
+                                       (cleanupPeriodDays) from
+                                       setup/settings.hooks.json, with this
+                                       machine's python.exe filled in
       5. $PROFILE                   <- dot-sources setup/pwsh/cc.ps1 (the `cc` launcher)
 
 .PARAMETER Python
-    python.exe used by the TL;NR hooks (stdlib only, any Python 3 works).
+    python.exe used by the TL;NR and session-colocate hooks (stdlib only;
+    Python >= 3.12, required by session-colocate's os.path.isjunction).
     Default: first non-Store `python` on PATH, then D:\Programming\anaconda3\python.exe.
 
 .EXAMPLE
@@ -72,6 +75,10 @@ if (-not $Python -and (Test-Path 'D:\Programming\anaconda3\python.exe')) {
 if (-not $Python -or -not (Test-Path $Python)) {
     throw "No python.exe found. Re-run with -Python <path-to-python.exe>."
 }
+& $Python -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    throw "$Python is older than 3.12 (session-colocate needs os.path.isjunction). Re-run with -Python <path-to-python.exe>."
+}
 Write-Host "Python for hooks: $Python"
 
 # ── 1. CLAUDE.md -> @import ──────────────────────────────────────────────────
@@ -98,7 +105,7 @@ foreach ($sub in 'commands', 'hooks') {
 }
 
 # ── 4. settings.json hooks ───────────────────────────────────────────────────
-Write-Host "`n[4/5] settings.json hooks"
+Write-Host "`n[4/5] settings.json hooks and settings"
 $settingsPath = Join-Path $claudeDir 'settings.json'
 $template = (Get-Content (Join-Path $setupDir 'settings.hooks.json') -Raw).
     Replace('{{PYTHON}}', ($Python -replace '\\', '/')).
@@ -111,6 +118,9 @@ $settings = if (Test-Path $settingsPath) {
 if (-not $settings.Contains('hooks')) { $settings['hooks'] = [ordered]@{} }
 
 $before = $settings | ConvertTo-Json -Depth 50
+foreach ($key in $template.settings.Keys) {
+    $settings[$key] = $template.settings[$key]
+}
 foreach ($event in $template.hooks.Keys) {
     $settings.hooks[$event] = $template.hooks[$event]
 }
@@ -120,7 +130,7 @@ if ($before -eq $after) {
 } else {
     Backup $settingsPath
     Set-Content -Path $settingsPath -Value $after
-    Write-Host "    updated events: $($template.hooks.Keys -join ', ')"
+    Write-Host "    updated keys: $($template.settings.Keys -join ', '); events: $($template.hooks.Keys -join ', ')"
 }
 
 # ── 5. PowerShell profile -> cc launcher ─────────────────────────────────────

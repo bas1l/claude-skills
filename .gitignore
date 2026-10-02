@@ -9,3 +9,6 @@ __pycache__/
 
 # Claude-managed sync of built-in skills (regenerated automatically)
 synced/
+
+# Hook runtime logs (session-colocate writes its log next to the script)
+hooks/*/*.log

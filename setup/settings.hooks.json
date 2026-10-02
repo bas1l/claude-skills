@@ -1,5 +1,8 @@
 {
-  "_comment": "Hook block merged into ~/.claude/settings.json by install.ps1. Each event listed here REPLACES that event in settings.json; events not listed are left alone. Placeholders: {{PYTHON}} = python.exe, {{CLAUDE_DIR}} = ~/.claude (forward slashes).",
+  "_comment": "Merged into ~/.claude/settings.json by install.ps1. Each top-level key under 'settings' is set in settings.json; each event under 'hooks' REPLACES that event in settings.json; keys and events not listed are left alone. Placeholders: {{PYTHON}} = python.exe, {{CLAUDE_DIR}} = ~/.claude (forward slashes).",
+  "settings": {
+    "cleanupPeriodDays": 36500
+  },
   "hooks": {
     "Notification": [
       {
@@ -14,6 +17,17 @@
       }
     ],
     "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": ["{{CLAUDE_DIR}}/skills/hooks/session-colocate/session_colocate.py"],
+            "timeout": 30,
+            "statusMessage": "Co-locating session temp data"
+          }
+        ]
+      },
       {
         "hooks": [
           {

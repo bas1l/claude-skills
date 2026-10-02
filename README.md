@@ -4,7 +4,7 @@ Global Claude Code setup: skills, hooks, global `CLAUDE.md`, and the PowerShell 
 
 ## New machine
 
-Requires PowerShell 7 (`pwsh`), Git with SSH access to this repo, and any Python 3 (the hooks use only the standard library).
+Requires PowerShell 7 (`pwsh`), Git with SSH access to this repo, and Python >= 3.12 (the hooks use only the standard library; session-colocate needs 3.12).
 
 ```powershell
 git clone git@github.com:bas1l/claude-skills.git $HOME\.claude\skills
@@ -20,7 +20,7 @@ git -C $HOME\.claude\skills pull
 pwsh -File $HOME\.claude\skills\setup\install.ps1          # only needed if setup/ changed
 ```
 
-Changes to skills, the TL;NR hook scripts, the global `CLAUDE.md` and `cc` apply on pull. Changes to `setup/claude/commands`, `setup/claude/hooks` or `setup/settings.hooks.json` apply only after the installer runs again. It is idempotent and backs up every file it changes as `<file>.bak-<timestamp>`.
+Changes to skills, the TL;NR and session-colocate hook scripts, the global `CLAUDE.md` and `cc` apply on pull. Changes to `setup/claude/commands`, `setup/claude/hooks` or `setup/settings.hooks.json` apply only after the installer runs again. It is idempotent and backs up every file it changes as `<file>.bak-<timestamp>`.
 
 ## Layout
 
@@ -28,10 +28,11 @@ Changes to skills, the TL;NR hook scripts, the global `CLAUDE.md` and `cc` apply
 |---|---|---|
 | `<skill>/SKILL.md` | Global skills | Directly: this repo *is* `~/.claude/skills` |
 | `hooks/tldr-gate/` | TL;NR summary gate (UserPromptSubmit + Stop hooks) | Referenced in place by `settings.json` |
+| `hooks/session-colocate/` | SessionStart hook: moves the session's `%TEMP%` dir (scratchpad, tasks) next to its transcript and leaves a junction ([README](hooks/session-colocate/README.md)) | Referenced in place by `settings.json` |
 | `setup/claude/CLAUDE.md` | Global instructions | `~/.claude/CLAUDE.md` is a one-line `@import` of it |
 | `setup/claude/commands/` | Slash commands (`/polish`) | Copied to `~/.claude/commands/` |
 | `setup/claude/hooks/` | Brainstorm SessionStart nudge, speak / on-stop scripts | Copied to `~/.claude/hooks/` (their state flags live there) |
-| `setup/settings.hooks.json` | Hook registrations | Merged into `~/.claude/settings.json`, which keeps its other keys; the events listed in the template are replaced |
+| `setup/settings.hooks.json` | Hook registrations and `cleanupPeriodDays` | Merged into `~/.claude/settings.json`, which keeps its other keys; the events and top-level keys listed in the template are replaced |
 | `setup/pwsh/cc.ps1` | `cc` launcher | Dot-sourced from `$PROFILE` |
 | `synced/` | Built-in skills that Claude Code syncs itself | Git-ignored |
 
