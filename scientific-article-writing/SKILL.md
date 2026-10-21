@@ -1,6 +1,6 @@
 ---
 name: scientific-article-writing
-description: "How Basil and Claude co-write a scientific journal article, in linked section pairs drafted and loaded together: figures first (claim check, gallery of house-style prototypes, ranked proposals, variants, export, staging); then Results with Materials and Methods (Results as verified standalone docx drafts, the Word review and trim loop with tracked changes, Methods cut to the kept Results); then Discussion with the state of the art; then Introduction with Conclusion, fitted to what was kept; then the Abstract last, alone. Takes an optional section argument (figures, results, methods, discussion, introduction, state-of-the-art, conclusion, abstract) and loads only that section's guidance, its pair's guidance and the global rules. Use whenever work touches a manuscript, article or paper: writing, drafting, revising, trimming or restructuring a Results, Methods, Discussion, Introduction, related-work, Conclusion or Abstract section (restructure the methods to follow the Results); generating, choosing or redrawing a paper figure; writing or shortening captions; building a figure gallery or prototype set; reviewing a reviewed or trimmed .docx edited in Word; adding context or corrections to kept text; staging figures into figures_selection; checking terms across figure, caption and text. Applies in the population-synthetic repo, the 40_llm-population-fidelity-benchmark manuscript folder and any future article, even when 'skill' or 'article' is not said."
+description: "How Basil and Claude co-write a scientific journal article, in linked section pairs drafted and loaded together: figures first (claim check, gallery of house-style prototypes, ranked proposals, variants, export, staging); then Results with Materials and Methods (Results as verified standalone docx drafts, the Word review and trim loop with tracked changes, Methods cut to the kept Results); then Discussion with the state of the art; then Introduction with Conclusion, fitted to what was kept; then the Abstract last, alone. Takes an optional section argument (figures, results, methods, discussion, introduction, state-of-the-art, conclusion, abstract) and loads only that section's guidance, its pair's guidance and the global rules; a task spanning several stages runs as a team of background teammates, one per section, that message each other and may spawn their own subagents. Use whenever work touches a manuscript, article or paper: writing, drafting, revising, trimming or restructuring a Results, Methods, Discussion, Introduction, related-work, Conclusion or Abstract section (restructure the methods to follow the Results); generating, choosing or redrawing a paper figure; writing or shortening captions; building a figure gallery or prototype set; reviewing a reviewed or trimmed .docx edited in Word; adding context or corrections to kept text; staging figures into figures_selection; checking terms across figure, caption and text. Applies in the population-synthetic repo, the 40_llm-population-fidelity-benchmark manuscript folder and any future article, even when 'skill' or 'article' is not said."
 ---
 
 # Scientific article writing
@@ -42,9 +42,9 @@ lines, no "Claude" as a tracked-change author.
 1. **Always** read `references/global.md` (working style, claim strength, terminology, citations,
    house style, docx build, notes and hand-over, the review and trim loop).
 2. **Then read the targeted section's file and its pair's file** from the table, and no other
-   section file. If no section is named, infer it from the request. Load a second pair only when
-   the task genuinely spans two stages (for example Methods and Discussion fitted to his trimmed
-   Results).
+   section file. If no section is named, infer it from the request. When the task genuinely spans
+   two stages (for example Methods and Discussion fitted to his trimmed Results), do not load the
+   second pair yourself: start a section team ("Tasks spanning several stages" below).
 3. **Then the project profile** (Step 0 below) when working on that project.
 
 | Section argument or intent | File | Pair (load too) |
@@ -58,6 +58,34 @@ lines, no "Claude" as a tracked-change author.
 | `conclusion`: the take-home message, spin check, how the Discussion ends without a Conclusions section | `references/sections/conclusion.md` | `references/sections/introduction.md` |
 | `abstract`: the standalone summary, its structure and moves, main numbers, venue word limits, keywords and discoverability | `references/sections/abstract.md` | none |
 | `review` or `trim` with no section named: a reviewed or trimmed docx, corrections, criticism | `references/global.md` section 9 only, plus the file of the section the docx holds | that section's pair |
+
+## Tasks spanning several stages: a section team
+
+A task that touches sections from more than one stage is run by a team of teammates, one per
+section touched, so that no context window holds every section's rules and text at once.
+
+1. **Say so first.** Before spawning anything, tell him: which sections the task touches, that
+   one teammate per section will be started, and that they will message each other. He can
+   narrow the set before it starts.
+2. **One teammate per section**, started in the background with the Agent tool and a `name` equal
+   to the section argument (`results`, `methods`, `discussion`, ...). Each one reads
+   `references/global.md`, its own section file and the project profile, and no other section
+   file. Its brief names the docx or text it owns and what the task asks of that section.
+3. **Teammates discuss directly** with SendMessage, addressed by name, instead of reading each
+   other's files: pair partners first (`methods` asks `results` for the order of outcomes,
+   `discussion` asks `state-of-the-art` which strands to take up, `conclusion` asks
+   `introduction` for the aim and questions), then across pairs where one section rests on
+   another. Each replies with conclusions, not file dumps.
+4. **Each teammate may spawn its own subagents** (number checks, literature lookups, docx builds)
+   to keep its own context window clean; it keeps their conclusions only.
+5. **The calling session orchestrates**: it briefs the teammates, relays every decision that is
+   his to make (never settled between teammates), and integrates their reports. It does not read
+   the section files itself.
+6. **One writer per file.** A docx or section text is edited by the teammate that owns it only;
+   the permission rule above binds every teammate and subagent.
+
+A task inside one stage (one section, or one pair) needs no team: the calling session loads the
+section file and its pair's file directly.
 
 ## Step 0: load the project profile
 
