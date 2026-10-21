@@ -16,14 +16,19 @@ revised then. Citation checks are in `references/global.md` section 4.
 
 ## 2. Link to the Discussion
 
-- Each strand of prior work set up here is taken up again in the Discussion's comparison with
-  prior work (`references/sections/discussion.md` section 2, item 3). A strand that does not
-  return there is cut, or flagged in the notes.
-- The Discussion compares our findings only against work positioned here, or against work it
-  justifies there as new (for example literature that bears only on an unexpected result); each
-  such addition is listed in the notes, with the question of whether it belongs here instead.
-- No source states this rule as such; it follows from drafting the two sections as a pair and
-  from the hourglass shape of the paper (`references/sections/introduction.md` section 1).
+A check, not a requirement: it flags, it never cuts.
+
+- Strands of prior work set up here are taken up again where the Discussion's comparison with
+  prior work needs them (`references/sections/discussion.md` section 2, item 3). A strand that
+  does not return there is flagged in the notes, not cut; he decides whether it stays.
+- The Discussion may cite literature not positioned here (for example work that bears only on an
+  unexpected result). Each such addition is listed in the notes, with the question of whether it
+  belongs here instead.
+- Evidence: in 15 highly cited articles (5 each from The Lancet Digital Health, JAMIA Open and
+  JMLR, extracted in October 2026; counts by script, not checked by hand), the Discussion cited
+  again 0 to 67% of the works positioned early (JAMIA Open median about 10%), and mostly cited new
+  ones. No source states a return rule; the check follows from drafting the two sections as a pair
+  and from the hourglass shape of the paper (`references/sections/introduction.md` section 1).
 
 ## 3. Placement
 
@@ -58,6 +63,9 @@ Background on where venues and guides put it, which decides the final placement:
   write that theme's paragraph (Wheaton,
   https://guides.library.wheaton.edu/PSCI361/Organizing_Lit_Review , **snippet-level**).
 - End each strand with how this work differs ("Our work differs from White in...", Peyton Jones).
+  Recommended practice, not the norm: only 4 of the 15 articles of section 2 do it. Keep it for a
+  benchmark paper, which must show what it measures that earlier benchmarks do not (section 9);
+  at minimum, the section as a whole states the difference.
 
 ## 5. Search and "first" claims
 
@@ -92,12 +100,13 @@ Check the draft for each, and fix or flag:
 - listing papers instead of positioning against them (section 1);
 - strawmanning: "be generous to the competition" (Peyton Jones);
 - omitting the closest competitor: "either you don't know... or pretending it's yours" (Peyton
-  Jones);
-- overlong history;
+  Jones); only 4 of the 15 articles of section 2 name it, but a benchmark paper should;
+- overlong history, or over the length norm at the final check (section 11);
+- the gap stated inside the related-work body instead of the Introduction (section 10);
 - terminology misuse: "overloading technical terminology" and "suitcase words" (Lipton &
   Steinhardt, https://arxiv.org/abs/1807.03341);
-- a strand never taken up in the Discussion, or a Discussion comparison against work not
-  positioned here and not justified as new (section 2).
+- a strand never taken up in the Discussion, or a Discussion comparison against new literature
+  not listed in the notes (section 2): flag, do not cut.
 
 ## 9. Benchmark papers
 
@@ -109,3 +118,34 @@ Check the draft for each, and fix or flag:
   prior benchmarks did not, not by a new method.
 - Unverified: EPJ Data Science structure; IJPDS author guidelines beyond the reviewer page. TMLR's
   pages do not mention related work.
+
+## 10. Gap, framing and tense
+
+Observed in all 15 articles of section 2 (common practice in highly cited work, not a venue rule):
+
+- **The gap lives in the Introduction**, stated once, before the method
+  (`references/sections/introduction.md` section 2, move 2). This section positions the work
+  against prior contributions; it does not carry the gap. A related-work section placed late (as
+  in all 5 JMLR articles) still leaves the gap in the Introduction.
+- **The gap is phrased as an absence or a need** ("no study has compared...", "has yet to be
+  measured"), not as a fault of named authors.
+- **Prior work is framed as complementary or supporting**, never as wrong ("these approaches are
+  complementary"). This is the operational form of "be generous to the competition" (section 8).
+- **Tense**: present tense for what is established ("X measures Y"), then "we" for this work.
+- **Novelty is shown, not announced**: by what this work measures or by numbers, with "first"
+  avoided (section 5).
+
+## 11. Length: the last check, never a drafting constraint
+
+- **While drafting the Discussion and the state of the art, do not constrain length.** Write
+  each strand as long as the positioning needs; trimming early cuts strands before the Discussion
+  has shown which ones it needs.
+- **The length check is the final step of the stage**, run once the Discussion is otherwise
+  finished (`references/sections/discussion.md` section 8), and before the stage counts as done.
+  It reports word counts in the notes and proposes cuts; it does not apply them without his
+  agreement.
+- Norm from the 15 articles of section 2: about 300 to 1,100 words, at most about 12% of the
+  main text (JAMIA Open 300 to 650 words, 7 to 14%; JMLR 456 to 1,101 words, 3 to 12%; Lancet
+  Digital Health Introductions 232 to 582 words, with the panel beside them). When folded into
+  the Introduction at final revision (section 3), the Introduction's own length rule also applies
+  (`references/sections/introduction.md` section 4).

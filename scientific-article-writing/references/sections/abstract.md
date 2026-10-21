@@ -22,6 +22,21 @@ is revised then. Claim strength and citation checks are in `references/global.md
   https://files.eric.ed.gov/fulltext/EJ1076961.pdf , **snippet-level**, also cited as Hyland
   2004). Studies of real abstracts find the introduction and conclusion moves are the ones most
   often missing (same source, **snippet-level**); check that both are present.
+- **Corpus study** (cited below as "the corpus"): 15 highly cited open-access articles (5 each
+  from The Lancet Digital Health, JAMIA Open and JMLR, extracted in October 2026; word and
+  sentence counts by script; moves, hedges, aim and conclusion comparisons, and the check of
+  abstract numbers against the body prose by hand, one coder, after a scripted first-pass search
+  for the numbers). It agrees on the missing moves: the conclusion move is absent in
+  4/15 (all JMLR) and the context move in 3/15. Every abstract has a methods and a results move
+  (15/15) and 14/15 state an objective.
+- **Conclusion sentence in an ML venue**: 4 of the 5 JMLR abstracts end on a result or on what
+  else the paper does, not on what the result means. This paper keeps a closing sentence of what
+  the result means anyway, one sentence long, even at an ML venue where it is above the norm.
+- **Objective restates the aim**: the abstract objective restates the Introduction's aim
+  sentence (`references/sections/introduction.md`), every aim included. In the corpus it mirrors
+  the aim in 12/15, often near-verbatim; the misses drop a second aim (a prognostic aim left out
+  of the abstract objective) or recast the Introduction's question as a system ("we present
+  Atlas" for "we investigate whether few-shot learning requires...").
 - **ICMJE content**: context or background; purpose; basic procedures (selection, settings,
   measurements, analytical methods); main findings with specific effect sizes and their
   significance where possible; principal conclusions; new and important aspects; important
@@ -29,7 +44,9 @@ is revised then. Claim strength and citation checks are in `references/global.md
 - **Nature summary paragraph**, a template for an unstructured abstract
   (https://www.nature.com/documents/nature-summary-paragraph.pdf): one or two sentences of basic
   introduction for any scientist; two or three of more detailed background; one sentence stating
-  the general problem; one sentence of the main result with "Here we show" or its equivalent; two
+  the general problem (optional here: the corpus states a gap or need in 7/15, and the aim
+  sentence carries the purpose in the others; keep it when the context alone does not make the
+  question obvious); one sentence of the main result with "Here we show" or its equivalent; two
   or three on what the result reveals against previous knowledge; one or two placing it in a
   general context; optionally two or three of broader perspective. About 190 words without the
   last part, up to 300 with it.
@@ -52,21 +69,42 @@ is revised then. Claim strength and citation checks are in `references/global.md
 
 ## 3. Content rules
 
-- **Main numbers with their uncertainty**: the headline rates or effect sizes with intervals or
-  the test that backs them, each one the same value the Results report (ICMJE asks for specific
-  effect sizes). No number appears that the main text does not contain.
+- **Main numbers with their comparator and uncertainty**: each headline rate or effect size is
+  given with its comparator (the baseline, reference or earlier period it is measured against;
+  13/15 in the corpus) and is the same value the Results report (ICMJE asks for specific effect
+  sizes). Add the interval or the test that backs it when the Results report one for that number;
+  in this paper they do, so include it. Only 5/15 corpus abstracts carry a CI or p value (Lancet
+  Digital Health 3, JAMIA Open 2, JMLR 0), so the interval is this paper's standard, not the
+  venues' norm. Do not invent an interval the Results do not give. No number appears that the
+  main text does not contain.
 - **No new information.** Abstracts with data that conflicted with the body, or that appeared
   nowhere in it, were 18 to 68% of abstracts across six general medical journals (Pitkin,
   Branagan, Burmeister, JAMA 1999;281:1110, https://doi.org/10.1001/jama.281.12.1110 ; figures from
   secondary summaries, https://chiro.org/ChiroZine/ABSTRACTS/Accuracy_of_Data.shtml ,
-  **snippet-level**). Check every abstract sentence against a kept sentence of the body.
+  **snippet-level**). Check every abstract sentence against a kept sentence of the body. Check
+  each number's unit, denominator and comparator, not only its digits: both conflicts found in
+  the corpus (2/15) kept the digits and changed the frame ("per day" in the abstract, "per week"
+  in the body; "50x fewer parameters" for "50x more pre-training compute", "3%" for "almost 3
+  points"). Percent and percentage points are a mismatch.
+- **Word budget**: about a third of the words go to the results; the results move is the largest
+  move in 11/15 corpus abstracts, at 34 to 43% of the words in the Lancet Digital Health ones.
 - **No citations** (PLOS ONE, https://journals.plos.org/plosone/s/submission-guidelines : "Do not
   include citations in abstracts").
-- **No undefined abbreviations**; avoid abbreviations where possible (PLOS ONE, above). An
+- **No undefined abbreviations**; avoid abbreviations where possible (PLOS ONE, above). Two
+  exceptions: the venue's listed standard abbreviations (check the venue's list; The Lancet Digital
+  Health leaves CI and IQR undefined, and 4/15 corpus abstracts leave CI, IQR, SD or OR undefined)
+  and proper names of datasets or benchmarks, which are given as named (MIMIC-CXR, MMLU). An
   abbreviation defined in the abstract is defined again at first use in the body.
 - **Method without methodological detail**: say how the study was done, not how each test works
   (PLOS ONE, above).
-- **Limitations**: note the important ones (ICMJE), in one clause, not a list.
+- **Limitations**: one clause, not a list, and only when the limitation bounds the headline claim
+  (ICMJE asks for the important ones; the corpus states one in 3/15, none in JMLR). Example: "Although
+  our sample captures only 507 (5.2%) of 9826 patients ... our data align with an official report".
+  When the body Conclusion puts a caveat on the main claim, the abstract carries it too (section 4).
+- **Tense and person**: methods and results in the past tense, the conclusion in the present
+  (corpus: results in the past tense in 8/10 clinical abstracts, conclusion in the present in
+  8/11 of those with one). At an ML venue present-tense results are the norm (JMLR 5/5). "We" is
+  acceptable (11/15).
 - **Claims and scope**: the abstract's claims reflect the contributions and scope
   (`references/sections/introduction.md` section 5); the generalisation scope is
   `references/sections/discussion.md` section 6.
@@ -75,6 +113,13 @@ is revised then. Claim strength and citation checks are in `references/global.md
 
 - The abstract's conclusion agrees with the main-text conclusion and with the results; the
   sentence-by-sentence comparison is `references/sections/conclusion.md` section 3.
+- Agreement includes the hedge: the abstract keeps every qualifier the body Conclusion puts on the
+  main claim and adds none it lacks. Check modal verbs and intensifiers word by word. In the corpus
+  the abstract conclusion matched the body in claim and strength in only 6/11 of the abstracts
+  that have one, and the mismatch ran both ways: stronger in the abstract ("had tremendous
+  impact", where the body Conclusion adds "they should be interpreted cautiously due to study
+  limitations") and weaker ("could have prognostic value" for the body's "carry prognostic
+  value").
 - Spin evidence and the checks for it are in `references/sections/conclusion.md` section 4. The
   abstract-specific point: abstracts are read apart from the text and spread into other databases
   and media, so a distortion there travels furthest (Winker, editorial accompanying Pitkin 1999,
@@ -98,7 +143,8 @@ is revised then. Claim strength and citation checks are in `references/global.md
   found; the author guide and editorial policies say nothing on the abstract
   (https://jmlr.org/tmlr/author-guide.html ; https://jmlr.org/tmlr/editorial-policies.html). The
   OpenReview abstract field's length limit is unverified (venues configure it); paste the same
-  paragraph there and check the form at submission.
+  paragraph there and check the form at submission. Aim for 150 to 230 words: the 5 JMLR corpus
+  abstracts run 155 to 227 (median 162), below the Nature template's "about 190" (section 2).
 - **EPJ Data Science**: unverified. The guidelines page
   (https://epjdatascience.springeropen.com/submission-guidelines/preparing-your-manuscript)
   redirects to https://link.springer.com/journal/13688/submission-guidelines , which redirects to
@@ -109,6 +155,10 @@ is revised then. Claim strength and citation checks are in `references/global.md
 
 ## 6. Discoverability
 
+- **Title form**: the title names the study object, the data and the method; it is descriptive,
+  not declarative (corpus: 15/15 descriptive, 0/15 state a finding). Venues of the Lancet type
+  append the design after a colon (": a modelling study", 5/5 Lancet Digital Health); JMLR titles
+  use "Name: description" in 3/5.
 - The title and abstract carry the terms a reader would search for (the study object, the data
   source, the method family), with the main term early in the title and in the first two
   sentences, which are often all a search engine shows (Wiley SEO guidance,
@@ -125,10 +175,19 @@ is revised then. Claim strength and citation checks are in `references/global.md
 
 Check the draft for each, and fix or flag:
 
-- a missing context or conclusion move (section 2);
-- results without numbers, or numbers without uncertainty;
-- a number, claim or term absent from the kept body (section 3);
-- a conclusion stronger than the results or different from the main-text conclusion (section 4);
-- citations, undefined abbreviations, or methodological detail;
+- a missing context or conclusion move, including at an ML venue (section 2);
+- an objective that does not restate every aim of the Introduction (section 2);
+- results without numbers, a headline number without its comparator, or without the interval
+  the Results give it (section 3);
+- a number, claim or term absent from the kept body, or a number whose unit, denominator or
+  comparator differs from the body's (section 3);
+- a limitation list, or a limitation that does not bound the headline claim (section 3);
+- results in the wrong tense for the venue, or less than about a third of the words on results
+  (section 3);
+- a conclusion stronger than the results or different from the main-text conclusion, or a hedge
+  dropped or added relative to it (section 4);
+- citations, undefined abbreviations outside the two exceptions, or methodological detail
+  (section 3);
 - over the venue's word limit or off its heading structure (section 5);
-- search terms missing from the title or the first two sentences (section 6).
+- a declarative title, or search terms missing from the title or the first two sentences
+  (section 6).

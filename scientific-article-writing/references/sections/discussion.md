@@ -81,7 +81,7 @@ Check the draft for each, and fix or flag:
 - causal wording from non-randomised designs; spin of this kind appeared in 53% of 128 abstracts
   (Lazarus et al. 2015, BMC Med Res Methodol 15:85, https://www.biomedcentral.com/1471-2288/15/85);
 - attacking other authors rather than explaining why results differ;
-- trivial endings ("more research is needed", a restated principal finding).
+- trivial endings ("more research is needed", ending on a restated principal finding).
 
 ## 6. Benchmark and methods papers
 
@@ -109,6 +109,13 @@ Check the draft for each, and fix or flag:
 - **NeurIPS-style venues** encourage a separate Limitations section.
 
 ## 8. Hand-over specifics
+
+- **Length is not constrained while drafting** the Discussion or its paired state of the art. The
+  length check of `references/sections/state-of-the-art.md` section 11 is the last step before
+  the Discussion counts as finished: report word counts, propose cuts in the notes, apply none
+  without his agreement.
+- Before that final check, run the flag-only check of `references/sections/state-of-the-art.md`
+  section 2 (strands not taken up, new literature cited here) and list the results in the notes.
 
 - Links to other sections are flagged in the notes when a sentence rests on results reported
   elsewhere.
