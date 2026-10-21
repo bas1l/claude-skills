@@ -42,7 +42,7 @@ skill. Never put drafts there.
 - Width 456 pt; Arial 8 to 12 pt; single inferno ramp; no `alpha=`; model order = published
   model_ranking order (Kimi K3 first); models as columns, strategies A to E as rows, reference in
   a detached column; model names above the grid at 90 degrees, host-tinted.
-- Staged figures: `MF\figures selection\` with `SOURCES.md` (provenance) and `captions\` (caption
+- Staged figures: `MF\figures_selection\` with `SOURCES.md` (provenance) and `captions\` (caption
   `.md` files, and the docx drafts beside them).
 - Gallery index: `MF\figure-galleries.md` (every gallery page with absolute path, date, session,
   choice). Update it whenever a gallery is made or a choice is taken.
@@ -60,9 +60,9 @@ skill. Never put drafts there.
   `manuscript-skeleton_NEW_<date>.docx` is a pending build, see `MF\CLAUDE.md`).
 - LaTeX: `MF\latex\` (a separate later step, compiled to `MF\latex\main.pdf`).
 - Backups: `MF\backup\<name>_YYYY-MM-DD_HHMM.docx`.
-- Reviewed examples showing his trim: `MF\figures selection\captions\typicality_distribution_by_model_strategy.results-reviewed-0 2.docx`
+- Reviewed examples showing his trim: `MF\figures_selection\captions\typicality_distribution_by_model_strategy.results-reviewed-0 2.docx`
   (the name really contains a space) and
-  `MF\figures selection\captions\severity_worst_clash_by_model_strategy.methods-results-discussion-draft.reviewed.docx`.
+  `MF\figures_selection\captions\severity_worst_clash_by_model_strategy.methods-results-discussion-draft.reviewed.docx`.
 
 ## Article-specific decisions
 

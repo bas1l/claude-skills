@@ -1,8 +1,11 @@
-# Figures workflow: from claim to staged figure
+# Figures and captions: from claim to staged figure
 
 The paradigm that produced the typicality grid (P20), the severity worst-clash grid (P19) and
 the clash-driver gallery. Project paths (presentation layer, width, staged folder) are in the
 project profile.
+
+**Figures only through the repository presentation layer**, even scratch ones: house order,
+width, palette, labels, no transparency, ids never on the canvas.
 
 ## 1. Establish the claim before plotting
 
@@ -70,7 +73,8 @@ project profile.
 - Write a **term table** (`term_table.txt` in the final folder): for each word printed on the
   figure or used in its caption, the article's term, the source with file:line (terminology
   rules, methods text, figure-terms config), and a status (resolved, taken from the instrument,
-  open). Rank or level names must read the same in figure, caption and Methods.
+  open). It is the record of the naming rule in `references/global.md` section 3: rank or
+  level names read the same in figure, caption and Methods.
 - Adopting the figure into the code pipeline is a separate step through the repository's plan
   workflow (plan with the prototype and golden tables as reproduction checks). Not part of this
   skill; offer it.
