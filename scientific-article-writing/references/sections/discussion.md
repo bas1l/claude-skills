@@ -1,7 +1,8 @@
 # Discussion: what the kept Results mean
 
-Written after Methods, interpreting the kept Results. Writing it before his trim invites claims
-about results that no longer appear. Claim strength, untested joint claims and citation checks are in
+Drafted together with the state of the art (`references/sections/state-of-the-art.md`, its
+pair), after the Results and Methods are kept, interpreting the kept Results. Writing it before
+his trim invites claims about results that no longer appear. Claim strength, untested joint claims and citation checks are in
 `references/global.md` sections 2 and 4; they bind every sentence here.
 
 ## 1. Purpose and shape
@@ -10,11 +11,13 @@ about results that no longer appear. Claim strength, untested joint claims and c
   repetition of the Results (Springer Nature, author guidance,
   https://www.springernature.com/gp/authors/campaigns/writing-a-manuscript/results ; Hess 2004,
   Respir Care 49:1238, https://www.math.ualberta.ca/~thillen/winter13/Hess-discussion.pdf).
-- Hourglass shape: it mirrors the Introduction, going from narrow (our own findings) to wide (the
-  literature) (HKU CAES,
-  https://caes.hku.hk/acadgrammar/report/repProc/sections/discuss/general.htm). Check that each
-  gap and question the Introduction stated (`references/sections/introduction.md` section 1) has
-  an answer here; flag in the notes any that has none.
+- Shape: from narrow (our own findings) to wide (the literature) (HKU CAES,
+  https://caes.hku.hk/acadgrammar/report/repProc/sections/discuss/general.htm); the hourglass of
+  the whole paper is in `references/sections/introduction.md` section 1.
+- Its link to the rest of the paper is the state of the art: the comparison with prior work
+  (section 2, item 3) takes up the strands positioned there, under the rule of
+  `references/sections/state-of-the-art.md` section 2. The questions the Introduction states are
+  answered by the Conclusion (`references/sections/conclusion.md` section 2).
 
 ## 2. Default paragraph order
 
@@ -28,7 +31,8 @@ questions. Follow the target venue's template where it fixes one; otherwise use 
 
 1. **Principal finding** in one plain sentence, no numbers.
 2. **Meaning** of the findings, most to least important.
-3. **Comparison with prior work**, including why our results differ where they do.
+3. **Comparison with prior work**, including why our results differ where they do, against the
+   strands the state of the art positions (`references/sections/state-of-the-art.md` section 2).
 4. **Alternative explanations**: "the purpose of research is to discover and not to prove"
    (Hess 2004). State each rival explanation the design cannot exclude.
 5. **Strengths and limitations**, given equal weight (section 3).

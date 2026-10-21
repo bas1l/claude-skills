@@ -1,7 +1,8 @@
 # Materials and Methods: cut to the kept Results
 
-Written after he has trimmed the Results, never before: Methods written ahead of the trim covers
-results he later cuts and must be cut again.
+Paired with the Results (`references/sections/results.md`) and written after he has trimmed
+them, never before: Methods written ahead of the trim covers results he later cuts and must be
+cut again.
 
 ## 1. Content
 

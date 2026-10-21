@@ -1,13 +1,13 @@
 # Conclusion: the take-home message
 
-Drafted after the Discussion, or revised then, so that it answers only what the kept Results
-support. Claim strength and citation checks are in `references/global.md` sections 2 and 4; they
+Drafted together with the Introduction (`references/sections/introduction.md`, its pair), after
+the Discussion, or revised then, so that it answers only what the kept Results support. Claim strength and citation checks are in `references/global.md` sections 2 and 4; they
 bind every sentence here.
 
 ## 1. Purpose
 
-- The Conclusion holds the take-home message: a short answer to the aim the Introduction stated
-  (`references/sections/introduction.md` section 1). The Discussion interprets, compares and
+- The Conclusion holds the take-home message: a short answer to the Introduction's aim
+  (section 2). The Discussion interprets, compares and
   covers limitations in depth; the Abstract summarises the whole study (Editage,
   https://www.editage.com/insights/discussion-vs-conclusion-in-research-paper).
 - It says what the principal finding means and why it matters. It does not rewrite the abstract
@@ -16,8 +16,11 @@ bind every sentence here.
 
 ## 2. Contents and length
 
-- Link each conclusion to a goal of the study (ICMJE,
-  https://www.icmje.org/recommendations/browse/manuscript-preparation/preparing-for-submission.html).
+- **Answer the Introduction.** "Link the conclusions with the goals of the study" (ICMJE,
+  https://www.icmje.org/recommendations/browse/manuscript-preparation/preparing-for-submission.html):
+  answer the aim and each question the Introduction states
+  (`references/sections/introduction.md` section 1). Flag in the notes any stated question left
+  without an answer, and any conclusion that answers no stated question.
 - The key findings without statistics; why they matter; one implication or next step (Editage;
   PLOS).
 - At most one sentence on limitations (Editage); the limitations themselves are in the

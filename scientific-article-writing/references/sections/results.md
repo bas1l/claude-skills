@@ -1,6 +1,7 @@
 # Results: verified standalone drafts
 
-The first text section, written after the figures and before Methods: one standalone docx per
+The first text section, written from the figures and paired with Materials and Methods
+(`references/sections/methods.md`, written from the kept Results): one standalone docx per
 analysis block, which he then trims and reviews in Word (`references/global.md` section 9).
 Build mechanics, banned-token check and the describe-versus-interpret boundary are in
 `references/global.md`.

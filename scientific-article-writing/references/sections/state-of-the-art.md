@@ -1,10 +1,9 @@
 # State of the art: positioning against prior work
 
 Covers the positioning section itself, whether it is a separate "related work" section or the
-literature paragraphs of the Introduction. Drafted after the Discussion, or revised then. The
-comparison of our findings with the literature inside the Discussion is in
-`references/sections/discussion.md` section 2. Citation checks are in `references/global.md`
-section 4.
+literature paragraphs of the Introduction. Drafted together with the Discussion
+(`references/sections/discussion.md`, its pair), after the Results and Methods are kept, or
+revised then. Citation checks are in `references/global.md` section 4.
 
 ## 1. Purpose
 
@@ -15,7 +14,26 @@ section 4.
   a "Relation to prior work" item
   (https://neurips.cc/Conferences/2023/DatasetsAndBenchmarks/ReviewGuidelines).
 
-## 2. Placement
+## 2. Link to the Discussion
+
+- Each strand of prior work set up here is taken up again in the Discussion's comparison with
+  prior work (`references/sections/discussion.md` section 2, item 3). A strand that does not
+  return there is cut, or flagged in the notes.
+- The Discussion compares our findings only against work positioned here, or against work it
+  justifies there as new (for example literature that bears only on an unexpected result); each
+  such addition is listed in the notes, with the question of whether it belongs here instead.
+- No source states this rule as such; it follows from drafting the two sections as a pair and
+  from the hourglass shape of the paper (`references/sections/introduction.md` section 1).
+
+## 3. Placement
+
+**Operating rule.** During drafting, keep the state of the art as a separate, temporary section,
+even for venues such as PLOS ONE and IJPDS that expect it inside the Introduction: it is easier to
+write and to keep in step with the Discussion that way. At final revision, fold it into the
+Introduction where the venue expects that. The fold is minimal: move the paragraphs and trim them
+lightly; do not rewrite them. List in the notes what the fold trimmed.
+
+Background on where venues and guides put it, which decides the final placement:
 
 - **PLOS ONE**: no separate section; the literature sits in the Introduction
   (`references/sections/introduction.md` section 6).
@@ -28,10 +46,10 @@ section 4.
   if it can be short yet detailed or a defensive stance is critical, late if the comparisons need
   the paper's technical content (https://cs.stanford.edu/people/widom/paper-writing.html).
 - Trade-off: biomedical and population-data venues expect it in the Introduction; ML venues
-  accept either. Follow the target venue's template; when it is silent, propose a placement in
-  the notes and let him decide.
+  accept either. The final placement follows the target venue's template; when it is silent,
+  propose a placement in the notes and let him decide.
 
-## 3. Organisation
+## 4. Organisation
 
 - By idea or subtopic, not source by source; chronological only when the chronology shows a trend
   (UNC, https://writingcenter.unc.edu/tips-and-tools/literature-reviews/ ; CSUN,
@@ -41,7 +59,7 @@ section 4.
   https://guides.library.wheaton.edu/PSCI361/Organizing_Lit_Review , **snippet-level**).
 - End each strand with how this work differs ("Our work differs from White in...", Peyton Jones).
 
-## 4. Search and "first" claims
+## 5. Search and "first" claims
 
 - A documented search (sources, inclusion criteria, dates, search terms) is the defensible basis
   for any "first" or "to our knowledge" claim. The Lancet "Evidence before this study" panel is
@@ -52,7 +70,7 @@ section 4.
   https://www.letpub.com/Let-your-research-speak-for-itself ; doi:10.1177/0310057X211025387;
   both **snippet-level**). Default: avoid the word; if kept, back it with the documented search.
 
-## 5. Recency and preprints
+## 6. Recency and preprints
 
 - Work appearing shortly before submission counts as contemporaneous: ICLR 2025 uses the last
   four months (https://iclr.cc/Conferences/2025/FAQ); ACL uses three months
@@ -61,13 +79,13 @@ section 4.
 - Preprints: PLOS ONE accepts them with a DOI or arXiv URL; the Lancet marks them "[preprint]".
   Follow the target venue's citation format.
 
-## 6. Cite only what was read
+## 7. Cite only what was read
 
 - About 20% of citers read the original, as estimated from the propagation of misprints in
   citations (Simkin & Roychowdhury, https://arxiv.org/abs/cond-mat/0212043). A source not read in
   full is marked under the rule of `references/global.md` section 4.
 
-## 7. Mistakes to check for
+## 8. Mistakes to check for
 
 Check the draft for each, and fix or flag:
 
@@ -78,11 +96,10 @@ Check the draft for each, and fix or flag:
 - overlong history;
 - terminology misuse: "overloading technical terminology" and "suitcase words" (Lipton &
   Steinhardt, https://arxiv.org/abs/1807.03341);
-- related work never reused in the Discussion. This is an inference from the hourglass shape, not
-  a rule any source names: each strand positioned here should return in the Discussion's
-  comparison with prior work (`references/sections/discussion.md` section 2, item 3), or be cut.
+- a strand never taken up in the Discussion, or a Discussion comparison against work not
+  positioned here and not justified as new (section 2).
 
-## 8. Benchmark papers
+## 9. Benchmark papers
 
 - Novelty of method is not required. TMLR: "novelty of the studied method is not a necessary
   criterion" (https://jmlr.org/tmlr/acceptance-criteria.html).
