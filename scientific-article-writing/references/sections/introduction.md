@@ -79,6 +79,8 @@ Follow the target venue's template where it fixes one (section 6); otherwise use
 - Cite only the literature that justifies the gap; the full positioning goes in its own section
   or is cited sparingly (USC; Bahadoran 2018). Where it goes, and how it is folded
   in at final revision, is decided in `references/sections/state-of-the-art.md` section 3.
+- Each background or gap claim triggers a Consensus search (`references/literature-search.md`
+  section 1); load that file with this one.
 - Length, biomedical: 250 to 600 words, 2 to 4 paragraphs, and too long if it exceeds
   two-thirds of the Results (Bahadoran 2018); about 6 to 17% of the main text, median 9%
   (corpus, section 8: 8 of 10 biomedical within the word range, 12 of 15 within the paragraph

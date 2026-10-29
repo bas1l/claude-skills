@@ -47,6 +47,10 @@ where it is more specific.
 
 - Literature only from verified sources. Each citation is marked checked against the source or
   snippet-only; snippet-only references are listed in the notes to verify before submission.
+- The full verification procedure is `references/citation-verification.md`.
+- Finding sources: search Consensus unprompted whenever a claim needs one, per
+  `references/literature-search.md` (Introduction, state of the art, Discussion, missing-citation
+  sweep).
 
 ## 5. House writing style
 

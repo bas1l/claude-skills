@@ -33,6 +33,8 @@ questions. Follow the target venue's template where it fixes one; otherwise use 
 2. **Meaning** of the findings, most to least important.
 3. **Comparison with prior work**, including why our results differ where they do, against the
    strands the state of the art positions (`references/sections/state-of-the-art.md` section 2).
+   Search Consensus for each finding compared, agreeing and conflicting
+   (`references/literature-search.md`, loaded with this file).
 4. **Alternative explanations**: "the purpose of research is to discover and not to prove"
    (Hess 2004). State each rival explanation the design cannot exclude.
 5. **Strengths and limitations**, given equal weight (section 3).

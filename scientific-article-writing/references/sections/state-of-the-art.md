@@ -77,6 +77,8 @@ Background on where venues and guides put it, which decides the final placement:
 - "First" claims: no publisher ban was found, but editors advise against them (LetPub,
   https://www.letpub.com/Let-your-research-speak-for-itself ; doi:10.1177/0310057X211025387;
   both **snippet-level**). Default: avoid the word; if kept, back it with the documented search.
+- The search itself runs on Consensus, unprompted, and is logged as
+  `references/literature-search.md` sets out; load that file with this one.
 
 ## 6. Recency and preprints
 
