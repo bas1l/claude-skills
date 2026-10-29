@@ -54,7 +54,7 @@ skill. Never put drafts there.
 - Docx toolkit: `MF\analysis-notes\docx-toolkit\_helpers.py` and
   `MF\analysis-notes\docx-toolkit\example_build_population_methods.py`. Copy both next to the
   output, adapt the copy; copy an improved `_helpers.py` back into `docx-toolkit\`.
-- Style template docx: `MF\F11-method-anova-results-draft.docx`. Style model article for the
+- Style template docx: `MF\notes\F11-method-anova-results-draft.docx`. Style model article for the
   order of statistical sentences: `F:\OneDrive - Linköpings universitet\Zotero\Duvernoy et al. - 2021 - Numerosity Identification Used to Assess Tactile Stimulation Methods for Communication.pdf`.
 - Skeleton he pastes into: `MF\manuscript-skeleton.docx` (never write to it unless asked;
   `manuscript-skeleton_NEW_<date>.docx` is a pending build, see `MF\CLAUDE.md`).
