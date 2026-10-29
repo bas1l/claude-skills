@@ -49,6 +49,16 @@
             "statusMessage": "TL;DR gate switch"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/msg-clock/msg_clock.py\" prompt",
+            "timeout": 10,
+            "statusMessage": "Message clock"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -59,6 +69,16 @@
             "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_gate.py\"",
             "timeout": 10,
             "statusMessage": "TL;DR gate"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/msg-clock/msg_clock.py\" reply",
+            "timeout": 10,
+            "statusMessage": "Message clock"
           }
         ]
       }
