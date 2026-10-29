@@ -2,14 +2,14 @@
 """UserPromptSubmit hook: TL;NR gate switch + per-turn rule injection.
 
 `tlnr on|off|status` (also tldr, tl;dr, tl;nr) as an entire prompt flips the flag
-and is erased (exit 2), so it costs no turn. Any other prompt passes through;
+and is erased ({"decision": "block"}, exit 0), so it costs no turn. Any other prompt passes through;
 when the flag is on, the rules go to stdout, which Claude Code injects as context
 the model can see -- the one channel the docs guarantee reaches Claude.
 
 The length threshold is announced here and enforced in tldr_gate.py. Both read
 it from tldr_conf.py so they cannot disagree.
 """
-import json, os, re, sys
+import datetime, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tldr_conf
@@ -42,13 +42,16 @@ Ask.
 
 
 def rules(cfg):
+    # The model cannot read the clock, so the hook stamps the time the prompt was
+    # sent. ASCII only: a non-ASCII separator comes out garbled on Windows stdout.
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     return """[TL;NR gate is ON for this turn.]
 
 If your response will run longer than about %d characters (roughly %d lines of
 prose), write the full answer first, then a blank line, then END the response
 with a summary block -- nothing may follow the block:
 
-**TL;NR**
+**TL;NR** (%s)
 - one to three bullets, each starting with "- "
 - plain words: no jargon, no hedging, no throat-clearing
 - essential facts only -- what is true, what it means, what to do next
@@ -70,11 +73,12 @@ block: no body above it, no memory of earlier turns. Concretely:
 Each bullet must stand alone, be readable in under two seconds, and be %d words
 or fewer -- long enough to name a subject, too short to become prose. Do not thin
 out the full answer above it; the block is an addition, not a replacement. The
-header may be written **TL;NR** or **TL;DR**.
+header may be written **TL;NR** or **TL;DR**, and must be followed by the
+timestamp exactly as shown above: "(%s)" -- the time this prompt was sent.
 %s
 If the response is shorter than that, skip the block entirely -- a short answer
 is already its own summary and a block under it is noise.""" % (
-        cfg["min_chars"], max(1, cfg["min_chars"] // 80), cfg["max_bullet_words"],
+        cfg["min_chars"], max(1, cfg["min_chars"] // 80), stamp, cfg["max_bullet_words"], stamp,
         (ASK_RULE % cfg["max_ask_words"]) if cfg["require_ask_bullet"] else "")
 
 
@@ -94,7 +98,7 @@ def state():
 
 def main():
     try:
-        data = json.load(sys.stdin)
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except Exception:
         sys.exit(0)                      # never break the prompt on a bad read
 
@@ -112,9 +116,10 @@ def main():
         elif action == "off" and os.path.exists(FLAG):
             os.remove(FLAG)
         msg = "TL;NR gate: %s (threshold %d chars)" % (state(), cfg["min_chars"])
-        print(json.dumps({"systemMessage": msg}))
-        print("[%s]" % msg, file=sys.stderr)
-        sys.exit(2)                      # erase the control phrase
+        # "block" erases the control phrase and shows the reason to the user;
+        # exit 0 keeps it from being drawn as a hook error.
+        print(json.dumps({"decision": "block", "reason": msg}))
+        sys.exit(0)
 
     if os.path.exists(FLAG):
         print(rules(cfg))                # injected as context Claude sees

@@ -4,10 +4,12 @@
 Short replies are exempt: below conf["min_chars"] the hook exits immediately, so
 a two-line answer never gets a summary bolted on top of it.
 
-Exit 2 prevents Claude from stopping and forces another turn. The docs do NOT
-promise a Stop hook's stderr reaches Claude (only PostToolUse and
-PostToolUseFailure document that), so the reason goes out on stderr AND as
-systemMessage -- whichever channel lands, lands.
+A violation is reported as {"decision": "block", "reason": ...} on stdout with
+exit 0: that stops Claude from ending the turn and hands it the reason, without
+the error-styled stderr output that exit 2 prints in the terminal.
+
+stdin is decoded as UTF-8 explicitly: on Windows Python defaults to cp1252, which
+garbles non-ASCII replies (wrong lengths) or fails on some bytes.
 
 Only structure is checked here. "Plain words" and "every bullet names its own
 subject" are not machine-checkable -- a regex for "the logging" would misfire on
@@ -22,12 +24,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tldr_conf
 
 FLAG      = os.path.join(tldr_conf.HOOK_DIR, "tldr-gate.flag")
+LOG       = os.path.join(tldr_conf.HOOK_DIR, "tldr-hook.log")
 STATE_DIR = os.path.join(os.environ.get("TEMP", tldr_conf.HOOK_DIR), "tldr-gate")
 
 CANONICAL = "**TL;NR**"
 # Accept either spelling, so the gate never rejects a block over a variant of
-# its own name.
-HEADER = re.compile(r"[*]{2}[ ]*TL[ ;:,.]*[DN]R[ ]*[*]{2}", re.IGNORECASE)
+# its own name. An optional "(YYYY-MM-DD HH:MM)" stamp may follow -- tldr_switch.py
+# supplies the prompt-sent time for it.
+HEADER = re.compile(r"[*]{2}[ ]*TL[ ;:,.]*[DN]R[ ]*[*]{2}"
+                    r"(?:[ ]*\(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?\))?",
+                    re.IGNORECASE)
 
 # The bullet that says what is wanted back from the operator. Bold optional, and
 # a few synonyms accepted, so a well-formed block is never rejected on wording.
@@ -147,24 +153,34 @@ def retries_exhausted(session_id, msg, cfg):
     return False
 
 
+def note(msg):
+    """One line per decision, so a surprise block can be traced to what was measured."""
+    try:
+        lines = open(LOG, encoding="utf-8").readlines() if os.path.exists(LOG) else []
+        lines = lines[-199:] + [msg + chr(10)]
+        open(LOG, "w", encoding="utf-8").writelines(lines)
+    except Exception:
+        pass
+
+
 def main():
     if not os.path.exists(FLAG):
         sys.exit(0)
 
     try:
-        data = json.load(sys.stdin)
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except Exception:
         sys.exit(0)                       # never wedge a turn on a bad read
 
     cfg = tldr_conf.load()
     msg = data.get("last_assistant_message") or ""
     chars, est_tokens = measure(msg)
+    errs = violations(msg, cfg) if chars >= cfg["min_chars"] else []
+    note("gate session=%s chars=%d active=%s errs=%d tail=%r"
+         % (str(data.get("session_id", "?"))[:8], chars,
+            data.get("stop_hook_active"), len(errs), msg.strip()[-60:]))
 
-    if chars < cfg["min_chars"]:          # short reply: exempt by design
-        sys.exit(0)
-
-    errs = violations(msg, cfg)
-    if not errs:
+    if not errs:                          # short reply, or a valid block
         sys.exit(0)
 
     if retries_exhausted(data.get("session_id", ""), msg, cfg):
@@ -184,9 +200,8 @@ def main():
               + chr(10) * 2 +
               "Problems found:" + chr(10) + "- " + (chr(10) + "- ").join(errs))
 
-    print(json.dumps({"systemMessage": reason}))
-    print(reason, file=sys.stderr)
-    sys.exit(2)
+    print(json.dumps({"decision": "block", "reason": reason}))
+    sys.exit(0)
 
 
 if __name__ == "__main__":
