@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Idempotent: run once after cloning, and again after any `git pull` that
-    touches setup/. It never deletes anything; every file it changes is first
+    touches setup/. Steps 1-5 never delete anything; every file they change is first
     backed up next to itself as <name>.bak-<timestamp>.
 
       1. ~/.claude/CLAUDE.md        -> one-line @import of setup/claude/CLAUDE.md
@@ -20,6 +20,10 @@
                                        setup/settings.hooks.json, with this
                                        machine's python.exe filled in
       5. $PROFILE                   <- dot-sources setup/pwsh/cc.ps1 (the `cc` launcher)
+      6. plugins, marketplaces and  <- reconciled with setup/plugins-mcp.json by
+         user-scope MCP servers        setup/plugins-mcp.ps1: missing ones are
+                                       installed, ones absent from the manifest
+                                       are uninstalled (this step does remove)
 
 .PARAMETER Python
     python.exe used by the TL;NR and session-colocate hooks (stdlib only;
@@ -82,7 +86,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Python for hooks: $Python"
 
 # ── 1. CLAUDE.md -> @import ──────────────────────────────────────────────────
-Write-Host "`n[1/5] Global CLAUDE.md"
+Write-Host "`n[1/6] Global CLAUDE.md"
 $claudeMd = Join-Path $claudeDir 'CLAUDE.md'
 $stub = "@~/.claude/skills/setup/claude/CLAUDE.md"
 $current = if (Test-Path $claudeMd) { (Get-Content $claudeMd -Raw).Trim() } else { '' }
@@ -96,7 +100,7 @@ if ($current -eq $stub) {
 
 # ── 2–3. Commands and hook scripts ───────────────────────────────────────────
 foreach ($sub in 'commands', 'hooks') {
-    Write-Host "`n[$(if ($sub -eq 'commands') {2} else {3})/5] ~/.claude/$sub"
+    Write-Host "`n[$(if ($sub -eq 'commands') {2} else {3})/6] ~/.claude/$sub"
     $dstDir = Join-Path $claudeDir $sub
     New-Item -ItemType Directory -Force $dstDir | Out-Null
     Get-ChildItem (Join-Path $setupDir "claude\$sub") -File | ForEach-Object {
@@ -105,7 +109,7 @@ foreach ($sub in 'commands', 'hooks') {
 }
 
 # ── 4. settings.json hooks ───────────────────────────────────────────────────
-Write-Host "`n[4/5] settings.json hooks and settings"
+Write-Host "`n[4/6] settings.json hooks and settings"
 $settingsPath = Join-Path $claudeDir 'settings.json'
 $template = (Get-Content (Join-Path $setupDir 'settings.hooks.json') -Raw).
     Replace('{{PYTHON}}', ($Python -replace '\\', '/')).
@@ -134,7 +138,7 @@ if ($before -eq $after) {
 }
 
 # ── 5. PowerShell profile -> cc launcher ─────────────────────────────────────
-Write-Host "`n[5/5] PowerShell profile (cc launcher)"
+Write-Host "`n[5/6] PowerShell profile (cc launcher)"
 $profilePath = $PROFILE.CurrentUserCurrentHost
 $line = '. "$HOME\.claude\skills\setup\pwsh\cc.ps1"   # Claude Code `cc` launcher (claude-skills repo)'
 $profileText = if (Test-Path $profilePath) { Get-Content $profilePath -Raw } else { '' }
@@ -150,4 +154,9 @@ if ($profileText -match [regex]::Escape('.claude\skills\setup\pwsh\cc.ps1')) {
     Write-Host "    added dot-source line: $profilePath"
 }
 
-Write-Host "`nDone. Open a new terminal (for cc) and restart Claude Code (for hooks and CLAUDE.md)."
+# ── 6. Plugins, marketplaces, MCP servers ────────────────────────────────────
+Write-Host "`n[6/6] Plugins, marketplaces and MCP servers (setup/plugins-mcp.json)"
+& (Join-Path $setupDir 'plugins-mcp.ps1')
+if ($LASTEXITCODE) { throw "plugins-mcp.ps1 failed (exit $LASTEXITCODE)." }
+
+Write-Host "`nDone. Open a new terminal (for cc) and restart Claude Code (for hooks, CLAUDE.md, plugins and MCP servers)."

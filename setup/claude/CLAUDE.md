@@ -41,6 +41,16 @@ Operate as a manager and orchestrator, not a hands-on worker. Your primary job i
 - Distinguish what is proven from what is plausible. State certainty level
   explicitly and do not present a conjecture as a conclusion.
 
+## Skills repo updates
+
+When the user asks to fetch, pull or update the skills repo (`~/.claude/skills`, `bas1l/claude-skills`):
+
+1. `git -C $HOME\.claude\skills pull`
+2. `pwsh -File $HOME\.claude\skills\setup\install.ps1` (no dry run). Step 6 reconciles plugins, marketplaces and user-scope MCP servers with `setup/plugins-mcp.json`: it installs what is missing and uninstalls what the manifest no longer lists.
+3. Report what the installer installed, removed, enabled or disabled, and any environment variable it says is missing (set nothing secret yourself; ask the user for the value). Remind the user to restart Claude Code.
+
+After installing or removing a plugin or MCP server on a machine, refresh the manifest with `pwsh -File $HOME\.claude\skills\setup\plugins-mcp.ps1 -Mode Capture`, review the diff and commit it.
+
 ## Guidance files
 
 <!-- Add pointers to detailed guidance here, e.g.:
