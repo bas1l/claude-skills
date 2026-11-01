@@ -22,6 +22,7 @@ own, so a session copied after the start date is read twice.
 from __future__ import annotations
 
 import collections
+import fnmatch
 import glob
 import json
 import os
@@ -133,13 +134,20 @@ def _is_under(path: str, prefix: str) -> bool:
     return normal_path == normal_prefix or normal_path.startswith(normal_prefix + os.sep)
 
 
+def _is_excluded(cwd: str, config: SessionsConfig) -> bool:
+    if any(_is_under(cwd, prefix) for prefix in config.excluded_cwd_prefixes):
+        return True
+    normal_cwd = os.path.normcase(os.path.normpath(cwd))
+    return any(fnmatch.fnmatchcase(normal_cwd, os.path.normcase(pattern)) for pattern in config.excluded_cwd_globs)
+
+
 def mode_of_cwds(cwds: Mapping[str, int], config: SessionsConfig) -> Optional[str]:
     """Return how to treat a session from its working directories; None means excluded.
 
     A session is excluded or count-only only when every record's directory is, so one
     that moved into a normal project is still read.
     """
-    if all(any(_is_under(cwd, prefix) for prefix in config.excluded_cwd_prefixes) for cwd in cwds):
+    if all(_is_excluded(cwd, config) for cwd in cwds):
         return None
     if all(any(_is_under(cwd, prefix) for prefix in config.count_only_cwd_prefixes) for cwd in cwds):
         return MODE_COUNT_ONLY

@@ -178,6 +178,14 @@ These came from running Phase 1 code on real data. Measured figures stay in loca
 - **Desktop-app prompts are marked `promptSource: sdk` with `origin.kind: human`** and are the user's words, so `sdk` alone does not mark a scripted prompt. Scripted prompts have no origin.
 - **The classifier was run over every transcript on this PC:** 291 sessions, 1,256 subagent files, no record rejected. So the known-type lists match today's format, and any addition stops the run.
 
+## Found while building the daily pass
+
+- **Interpreter:** `Invoke-Upkeep.ps1` reads it from the machine's local settings file, named by `paths.local_settings` in `config.json`, as `{"python_exe": "<full path>"}`. The path differs per machine and this repository is public, so it is not in `config.json`. A missing file or interpreter stops the run.
+- **Failure marker:** `<data>\failure-marker.json`; format and clearing rule are in the header of `Invoke-Upkeep.ps1`. The file exists only when there is something to report, so the Phase 7 hook needs only to read it.
+- **`git` on the machine `PATH`:** confirmed on this PC, which matters because an S4U task does not get user `PATH` entries. Not run under S4U.
+- **A long Bash tool command fails with `ENAMETOOLONG`:** the same fault as in the trials, hit again while building this. Long text went through files instead.
+- **A window can stick:** if records stamped inside a pinned window appear after an interruption, its chunks differ from those recorded and the session fails on every run with `WindowMismatchError`, reported by id. Clearing it means deleting that window's folder by hand. Not seen in real data.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.

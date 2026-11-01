@@ -21,12 +21,14 @@ class PathsConfig:
     data_dir: str
     run_dir: str
     claude_exe: str
+    local_settings: str
 
 
 @dataclass(frozen=True)
 class SessionsConfig:
     start_date: datetime
     excluded_cwd_prefixes: tuple[str, ...]
+    excluded_cwd_globs: tuple[str, ...]
     count_only_cwd_prefixes: tuple[str, ...]
 
 
@@ -65,6 +67,12 @@ class CountsConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    author_name: str
+    author_email: str
+
+
+@dataclass(frozen=True)
 class SecretsConfig:
     patterns: tuple[tuple[str, str], ...]
 
@@ -77,6 +85,7 @@ class Config:
     chunking: ChunkingConfig
     model: ModelConfig
     counts: CountsConfig
+    memory: MemoryConfig
     secrets: SecretsConfig
 
 
@@ -110,6 +119,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("chunking", ChunkingConfig),
         ("model", ModelConfig),
         ("counts", CountsConfig),
+        ("memory", MemoryConfig),
         ("secrets", SecretsConfig),
     ):
         _check_keys(section, raw[section], section_type)
@@ -123,6 +133,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         sessions=SessionsConfig(
             start_date=_parse_utc_aware(sessions["start_date"]),
             excluded_cwd_prefixes=tuple(_expand_path(p) for p in sessions["excluded_cwd_prefixes"]),
+            excluded_cwd_globs=tuple(_expand_path(p) for p in sessions["excluded_cwd_globs"]),
             count_only_cwd_prefixes=tuple(_expand_path(p) for p in sessions["count_only_cwd_prefixes"]),
         ),
         cuts=CutsConfig(**{**cuts, "report_tools": tuple(cuts["report_tools"])}),
@@ -134,6 +145,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
             signature_chars=counts["signature_chars"],
             shell_tools=tuple(counts["shell_tools"]),
         ),
+        memory=MemoryConfig(**raw["memory"]),
         secrets=SecretsConfig(patterns=tuple((name, pattern) for name, pattern in raw["secrets"]["patterns"])),
     )
 

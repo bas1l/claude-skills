@@ -14,7 +14,7 @@ START = t.parse_timestamp("2030-01-01T10:10:00Z")
 
 
 def session_config(excluded=(), count_only=()):
-    return SessionsConfig(start_date=START, excluded_cwd_prefixes=tuple(excluded), count_only_cwd_prefixes=tuple(count_only))
+    return SessionsConfig(start_date=START, excluded_cwd_prefixes=tuple(excluded), excluded_cwd_globs=(), count_only_cwd_prefixes=tuple(count_only))
 
 
 def make_session(root, minutes, folder="F--project", session_id=SESSION_ID, cwd=CWD):

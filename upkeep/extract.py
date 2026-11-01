@@ -32,12 +32,16 @@ import transcripts
 from config import Config, load_config
 
 WINDOW_SCHEMA_VERSION = 1
-CHUNK_SCHEMA_VERSION = 1
+CHUNK_SCHEMA_VERSION = 2
 PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "extract.md")
 
 QUOTE_VERIFIED = "verified"
 QUOTE_NOT_FOUND = "not_found"
 QUOTE_NONE = "no_quote"
+
+
+class WindowMismatchError(ValueError):
+    """Chunks on disk do not belong to this window, so resuming would mix two readings."""
 
 
 def write_json_atomic(path: str, document: Mapping[str, Any]) -> None:
@@ -71,15 +75,48 @@ def _check_window_file(path: str, document: Mapping[str, Any]) -> None:
     with open(path, encoding="utf-8") as handle:
         existing = json.load(handle)
     if existing != document:
-        raise ValueError(f"{path}: this window's chunks differ from those recorded; refusing to resume")
+        raise WindowMismatchError(f"{path}: this window's chunks differ from those recorded; refusing to resume")
 
 
 def _validated_chunk_on_disk(path: str, chunk: render.Chunk) -> dict[str, Any]:
     with open(path, encoding="utf-8") as handle:
         document = json.load(handle)
+    if document.get("schema_version") != CHUNK_SCHEMA_VERSION:
+        raise WindowMismatchError(f"{path}: chunk schema version {document.get('schema_version')!r}")
     if document.get("chunk_sha256") != chunk.sha256:
-        raise ValueError(f"{path}: chunk hash differs from this window; refusing to resume")
+        raise WindowMismatchError(f"{path}: chunk hash differs from this window; refusing to resume")
     return document
+
+
+def redact_value(value: Any, config: Config) -> tuple[Any, int]:
+    """A JSON-ready value with secret patterns replaced in every string, and the match count."""
+    if isinstance(value, str):
+        return render.redact_counted(value, config.secrets)
+    if isinstance(value, list):
+        pairs = [redact_value(item, config) for item in value]
+        return [item for item, _ in pairs], sum(count for _, count in pairs)
+    if isinstance(value, dict):
+        pairs = {key: redact_value(item, config) for key, item in value.items()}
+        return {key: pair[0] for key, pair in pairs.items()}, sum(pair[1] for pair in pairs.values())
+    return value, 0
+
+
+def counts_document(
+    item: sessions.WorkItem, entries: Sequence[transcripts.Entry], config: Config, run_id: str
+) -> tuple[dict[str, Any], int]:
+    """Counts for a window, with secret patterns redacted from error signatures and the like."""
+    counted, redacted = redact_value(counts_module.count_entries(entries, config.counts), config)
+    return (
+        {
+            "session_id": item.files.session_id,
+            "project_cwd": item.project_cwd,
+            "after": item.after.isoformat(),
+            "through": item.through.isoformat(),
+            "run_id": run_id,
+            **counted,
+        },
+        redacted,
+    )
 
 
 def _usage_summary(result: model_call.ModelResult) -> dict[str, Any]:
@@ -114,17 +151,8 @@ def extract_window(
     entries = list(
         transcripts.iter_session_entries(item.files.main_path, item.files.subagent_paths, item.after, item.through)
     )
-    write_json_atomic(
-        os.path.join(out_dir, "counts.json"),
-        {
-            "session_id": item.files.session_id,
-            "project_cwd": item.project_cwd,
-            "after": item.after.isoformat(),
-            "through": item.through.isoformat(),
-            "run_id": run_id,
-            **counts_module.count_entries(entries, config.counts),
-        },
-    )
+    counts_doc, counts_redacted = counts_document(item, entries, config, run_id)
+    write_json_atomic(os.path.join(out_dir, "counts.json"), counts_doc)
     user_entries = [entry for entry in entries if entry.kind in transcripts.USER_OWN_KINDS]
     rendered = render.render_entries(entries, config.cuts, config.secrets)
     timeline = render.build_timeline(rendered)
@@ -189,8 +217,12 @@ def extract_window(
             notes = schemas.parse_notes(result.text)
         except schemas.SchemaError:
             with open(path[: -len(".json")] + ".rejected", "w", encoding="utf-8") as handle:
-                handle.write(result.text)
+                handle.write(render.redact_secrets(result.text, config.secrets))
             raise
+        # The quote check needs the note as written, so redaction comes after it.
+        checked_notes, notes_redacted = redact_value(
+            [{**note.to_json(), "quote_check": quote_check_of(note, user_entries)} for note in notes], config
+        )
         document = {
             "schema_version": CHUNK_SCHEMA_VERSION,
             "notes_schema_version": schemas.NOTES_SCHEMA_VERSION,
@@ -204,9 +236,8 @@ def extract_window(
             "last": chunk.last_timestamp.isoformat(),
             "model_requested": model,
             **_usage_summary(result),
-            "notes": [
-                {**note.to_json(), "quote_check": quote_check_of(note, user_entries)} for note in notes
-            ],
+            "secrets_redacted": notes_redacted,
+            "notes": checked_notes,
         }
         write_json_atomic(path, document)
         processed.append(document)
@@ -216,6 +247,7 @@ def extract_window(
         "chunks_total": len(chunks),
         "chunks_done": sorted(document["chunk"] for document in processed),
         "notes": sum(len(document["notes"]) for document in processed),
+        "secrets_redacted": counts_redacted + sum(document["secrets_redacted"] for document in processed),
         "spent_this_call_usd": spent,
     }
 

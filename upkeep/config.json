@@ -3,11 +3,13 @@
     "projects_dir": "~/.claude/projects",
     "data_dir": "~/.claude/upkeep",
     "run_dir": "~/.claude/upkeep/run",
-    "claude_exe": "~/.local/bin/claude.exe"
+    "claude_exe": "~/.local/bin/claude.exe",
+    "local_settings": "~/.claude/upkeep/local.json"
   },
   "sessions": {
-    "start_date": "2026-11-01T00:00:00+00:00",
+    "start_date": "2026-11-01T00:00:00+01:00",
     "excluded_cwd_prefixes": ["~/.claude/upkeep"],
+    "excluded_cwd_globs": ["~/AppData/Local/Temp/upkeep-*"],
     "count_only_cwd_prefixes": ["~/.claude/daily-brief"]
   },
   "cuts": {
@@ -46,6 +48,10 @@
     "class_scan_chars": 3000,
     "signature_chars": 70,
     "shell_tools": ["Bash", "PowerShell"]
+  },
+  "memory": {
+    "author_name": "Basil Duvernoy",
+    "author_email": "basil.duvernoy@gmail.com"
   },
   "secrets": {
     "patterns": [

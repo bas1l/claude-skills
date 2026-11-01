@@ -111,10 +111,17 @@ def cut_text(text: str, limit: int | None) -> str:
     return f"{text[:limit]} ...[CUT {len(text) - limit} chars]"
 
 
-def redact_secrets(text: str, secrets: SecretsConfig) -> str:
+def redact_counted(text: str, secrets: SecretsConfig) -> tuple[str, int]:
+    """The text with every secret pattern replaced, and how many matches there were."""
+    total = 0
     for name, pattern in secrets.patterns:
-        text = re.sub(pattern, f"[REDACTED-{name}]", text)
-    return text
+        text, matches = re.subn(pattern, f"[REDACTED-{name}]", text)
+        total += matches
+    return text, total
+
+
+def redact_secrets(text: str, secrets: SecretsConfig) -> str:
+    return redact_counted(text, secrets)[0]
 
 
 def _clean(text: str) -> str:
