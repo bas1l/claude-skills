@@ -164,6 +164,20 @@ The existing tasks show `LogonType S4U`, `RunLevel Limited`, so the elevation is
 
 An Interactive-logon task would avoid UAC, but it runs only while the user is logged on, and it would miss a run after a reboot with nobody logged in. Keep S4U.
 
+## Found while building the reading path
+
+These came from running Phase 1 code on real data. Measured figures stay in local files.
+
+- **`--max-budget-usd` enforcement: verified.** With a limit below one call's cost, the call ends with exit code 1 and `subtype: error_max_budget_usd`. The result still parses as JSON, so `model_call.py` reports it as its own error. The value must be above zero: a limit rounded to `0.00` is refused as an invalid argument, so limits are passed with 6 decimals.
+- **The result JSON carries** `usage`, `modelUsage`, `total_cost_usd`, `duration_ms`, `num_turns` and `permission_denials`, and `modelUsage` names the model that ran, so "session default" can be recorded by name. A tool request in the prompt under the extraction flags gave one turn, no denials and no files.
+- **Characters per token:** about 2.3 on one real chunk of 320,000 bytes, close to the 2 observed in the trial. A chunk of 300,000 characters plus a timeline stayed well under the context window.
+- **One session id can exist in two project folders**, as an identical copy or with different lengths, so state is keyed by folder and id. A session copied after the start date would be read twice.
+- **Subagent files can sit deeper** than `subagents/`, under `subagents/workflows/<id>/`, beside a `journal.jsonl` that is not a transcript. Only `agent-*.jsonl` is read.
+- **Subagent files repeat main-conversation records** with the same uuid, so a uuid is read once per session.
+- **One API message spans several records that repeat its usage.** Summing per record overstates tokens, so usage is counted once per message id.
+- **Desktop-app prompts are marked `promptSource: sdk` with `origin.kind: human`** and are the user's words, so `sdk` alone does not mark a scripted prompt. Scripted prompts have no origin.
+- **The classifier was run over every transcript on this PC:** 291 sessions, 1,256 subagent files, no record rejected. So the known-type lists match today's format, and any addition stops the run.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.

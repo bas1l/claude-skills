@@ -1,0 +1,65 @@
+{
+  "paths": {
+    "projects_dir": "~/.claude/projects",
+    "data_dir": "~/.claude/upkeep",
+    "run_dir": "~/.claude/upkeep/run",
+    "claude_exe": "~/.local/bin/claude.exe"
+  },
+  "sessions": {
+    "start_date": "2026-11-01T00:00:00+00:00",
+    "excluded_cwd_prefixes": ["~/.claude/upkeep"],
+    "count_only_cwd_prefixes": ["~/.claude/daily-brief"]
+  },
+  "cuts": {
+    "tool_chars": 2000,
+    "report_chars": 8000,
+    "pasted_chars": 4000,
+    "compact_summary_chars": 2000,
+    "system_chars": 600,
+    "hook_chars": 2000,
+    "report_tools": ["Agent", "Task"],
+    "hook_repeat_prefix_chars": 60
+  },
+  "chunking": {
+    "chunk_chars": 300000,
+    "stdin_limit_bytes": 10000000
+  },
+  "model": {
+    "extract_model": "opus",
+    "run_budget_usd": 25,
+    "call_timeout_seconds": 1800,
+    "scrub_env_prefixes": ["CLAUDECODE", "CLAUDE_CODE_", "CLAUDE_PID", "CLAUDE_EFFORT"]
+  },
+  "counts": {
+    "error_classes": [
+      ["permission or harness refusal", "(?i)permission|not allowed|denied|doesn't want to proceed|blocked|refus"],
+      ["command too long", "(?i)too long|ENAMETOOLONG|Argument list"],
+      ["timeout", "(?i)timed? ?out"],
+      ["file not read first or edit mismatch", "(?i)not been read|has been modified|String to replace not found|old_string"],
+      ["file missing", "(?i)no such file|cannot find|not found|does not exist"],
+      ["python traceback", "Traceback \\(most recent"],
+      ["unicode", "(?i)unicode(en|de)codeerror|charmap"],
+      ["import or module", "(?i)ModuleNotFound|ImportError"],
+      ["memory", "(?i)MemoryError|out of memory|Killed"],
+      ["exit code", "(?i)exit code"]
+    ],
+    "class_scan_chars": 3000,
+    "signature_chars": 70,
+    "shell_tools": ["Bash", "PowerShell"]
+  },
+  "secrets": {
+    "patterns": [
+      ["anthropic", "sk-ant-[A-Za-z0-9_\\-]{10,}"],
+      ["sk", "\\bsk-[A-Za-z0-9]{20,}"],
+      ["github", "gh[pousr]_[A-Za-z0-9]{20,}"],
+      ["github", "github_pat_[A-Za-z0-9_]{20,}"],
+      ["aws", "AKIA[0-9A-Z]{16}"],
+      ["slack", "xox[abpr]-[A-Za-z0-9\\-]{10,}"],
+      ["google", "AIza[0-9A-Za-z_\\-]{30,}"],
+      ["bearer", "(?i)\\bbearer\\s+[A-Za-z0-9._~+/=\\-]{20,}"],
+      ["key-value", "(?i)\\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\\b\\s*[=:]\\s*[\"']?[^\\s\"']{8,}"],
+      ["jwt", "eyJ[A-Za-z0-9_\\-]{15,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{5,}"],
+      ["pem", "-----BEGIN [A-Z ]*PRIVATE KEY-----"]
+    ]
+  }
+}
