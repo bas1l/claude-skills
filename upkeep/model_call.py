@@ -4,6 +4,9 @@ Pins the flags tested in ``docs/verification.md``: ``--tools ''`` alone leaves M
 available, so the extraction call also needs ``--strict-mcp-config`` and the others, and
 a research call needs ``--allowedTools`` because ``dontAsk`` refuses anything not allowed.
 
+A research call uses the stream output, which holds each tool call and its result, so that
+what was searched comes from the record of the run and not from the model's account of it.
+
 The prompt goes on stdin, in UTF-8. Each call is logged with its command line, sizes,
 usage and the result check, whether or not it succeeded.
 """
@@ -31,6 +34,16 @@ class BudgetExhaustedError(ModelCallError):
 
 
 @dataclass(frozen=True)
+class ToolActivity:
+    """One tool call in a research run, with the text of its result."""
+
+    name: str
+    input: Mapping[str, Any]
+    result_text: str
+    is_error: bool
+
+
+@dataclass(frozen=True)
 class ModelResult:
     text: str
     usage: Mapping[str, Any]
@@ -39,16 +52,19 @@ class ModelResult:
     duration_ms: int
     num_turns: int
     command_line: tuple[str, ...]
+    tool_activity: tuple[ToolActivity, ...] = ()
 
 
 def build_command(claude_exe: str, tools: Sequence[str], model: Optional[str], max_budget_usd: float) -> list[str]:
     """The exact command for a tool list. ``model=None`` leaves the session default."""
     command = [claude_exe, "-p"]
+    output_format = ["--output-format", "json"]
     if not tools:
         command += ["--tools", ""]
     elif tuple(tools) == RESEARCH_TOOLS:
         joined = ",".join(tools)
         command += ["--tools", joined, "--allowedTools", joined, "--permission-prompts", "none"]
+        output_format = ["--output-format", "stream-json", "--verbose"]
     else:
         raise ValueError(f"tool list not allowed: {list(tools)}")
     command += [
@@ -56,7 +72,7 @@ def build_command(claude_exe: str, tools: Sequence[str], model: Optional[str], m
         "--strict-mcp-config",
         "--disable-slash-commands",
         "--settings", NO_HOOKS_SETTINGS,
-        "--output-format", "json",
+        *output_format,
         "--max-budget-usd", f"{max_budget_usd:.6f}",
     ]
     if model is not None:
@@ -95,6 +111,43 @@ def check_result(stdout: str, returncode: int, stderr: str) -> Mapping[str, Any]
         if key not in result:
             raise ModelCallError(f"result lacks {key!r}")
     return result
+
+
+def _result_text_of(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(block.get("text", "")) if isinstance(block, dict) else str(block) for block in content)
+    raise ModelCallError(f"tool result content has an unexpected shape: {type(content).__name__}")
+
+
+def parse_stream(stdout: str) -> tuple[str, tuple[ToolActivity, ...]]:
+    """From a stream output: the final result line as JSON text, and the tool calls made.
+    A call with no result recorded counts as failed."""
+    calls: dict[str, dict[str, Any]] = {}
+    results: dict[str, tuple[str, bool]] = {}
+    final = ""
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ModelCallError(f"stream line is not JSON: {error}") from error
+        kind = event.get("type")
+        if kind == "result":
+            final = line
+        elif kind in ("assistant", "user"):
+            content = event["message"]["content"]
+            for block in content if isinstance(content, list) else ():
+                if block.get("type") == "tool_use":
+                    calls[block["id"]] = {"name": block["name"], "input": block["input"]}
+                elif block.get("type") == "tool_result":
+                    results[block["tool_use_id"]] = (_result_text_of(block.get("content", "")), bool(block.get("is_error")))
+    activity = tuple(
+        ToolActivity(call["name"], call["input"], *results.get(call_id, ("", True))) for call_id, call in calls.items()
+    )
+    return final, activity
 
 
 def _append_log(path: str, record: Mapping[str, Any]) -> None:
@@ -146,6 +199,9 @@ def call_model(
         stdout = completed.stdout.decode("utf-8")
         stderr = completed.stderr.decode("utf-8", "replace")
         log["returncode"] = completed.returncode
+        activity: tuple[ToolActivity, ...] = ()
+        if "stream-json" in command:
+            stdout, activity = parse_stream(stdout)
         result = check_result(stdout, completed.returncode, stderr)
     except (ModelCallError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
         log.update(check="failed", error=str(error), wall_seconds=round(time.monotonic() - started, 1))
@@ -160,6 +216,7 @@ def call_model(
         duration_ms=result["duration_ms"],
         num_turns=result["num_turns"],
         result_chars=len(result["result"]),
+        tool_calls=[item.name for item in activity],
     )
     _append_log(usage_log_path, log)
     return ModelResult(
@@ -170,4 +227,5 @@ def call_model(
         duration_ms=result["duration_ms"],
         num_turns=result["num_turns"],
         command_line=tuple(command),
+        tool_activity=activity,
     )

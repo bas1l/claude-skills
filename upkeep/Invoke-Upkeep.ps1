@@ -21,13 +21,13 @@
   exists only when there is something to report:
 
     {"schema_version": 1,
-     "entries": [{"kind": "failed|budget_stopped|stale_lock|secrets_matched",
+     "entries": [{"kind": "failed|budget_stopped|stale_lock|secrets_matched|window_reset",
                   "pass": "daily", "run_id": "...", "at": "...", "exit_code": 1,
                   "summary": "one line", "failed_sessions": [...], "backlog_sessions": N,
                   "secrets_redacted": N, "details": "<path>"}]}
 
   A clean run of a pass clears that pass's "failed" and "budget_stopped" entries, since it
-  has caught up. "stale_lock" and "secrets_matched" stay until someone reads them and
+  has caught up. "stale_lock", "secrets_matched" and "window_reset" stay until someone reads them and
   deletes the entry or the file.
 #>
 [CmdletBinding()]
@@ -207,6 +207,9 @@ try {
         } else {
             $why = if ($result.stop_reason) { "stopped: $($result.stop_reason)" } else { "$(@($result.failed_sessions).Count) sessions and $(@($result.memory_snapshot.errors).Count) memory folders failed" }
             Add-MarkerEntry $markerPath 'failed' "$Pass pass failed, $why" $exitCode $resultPath $result
+        }
+        if ($null -ne $result -and @($result.windows_reset).Count -gt 0) {
+            Add-MarkerEntry $markerPath 'window_reset' "$Pass pass discarded and read again $(@($result.windows_reset).Count) windows whose records had changed." $exitCode $resultPath $result
         }
         if ($null -ne $result -and [int] $result.secrets_redacted -gt 0) {
             Add-MarkerEntry $markerPath 'secrets_matched' "$Pass pass redacted $($result.secrets_redacted) secret pattern matches; read the notes of run $runId." $exitCode $resultPath $result

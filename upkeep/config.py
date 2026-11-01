@@ -96,6 +96,45 @@ class LedgerConfig:
 
 
 @dataclass(frozen=True)
+class WeeklyConfig:
+    memory_model: str
+    proposal_model: str
+    recurrence_sessions: int
+    costly_once_tool_calls: int
+    failure_min_commands_lost: int
+    failures_shown: int
+    max_deletions_per_pass: int
+    quote_failure_batch_min: int
+    said_quote_shared_word_letters: int
+    group_chars: int
+    source_assistant_chars: int
+    claim_max_chars: int
+    title_max_chars: int
+    index_hook_chars: int
+    reproposal_word_overlap: float
+    memory_excluded_origins: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResearchConfig:
+    model: str
+    budget_per_candidate_usd: float
+    max_per_pass: int
+    description_max_chars: int
+    memory_shingle_words: int
+    public_path_fragments: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LocalSettings:
+    """What differs per machine and stays out of this public repository."""
+
+    python_exe: str
+    apply_memory_changes: bool
+    private_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     paths: PathsConfig
     sessions: SessionsConfig
@@ -107,6 +146,8 @@ class Config:
     secrets: SecretsConfig
     inventory: InventoryConfig
     ledger: LedgerConfig
+    weekly: WeeklyConfig
+    research: ResearchConfig
 
 
 def _expand_path(value: str) -> str:
@@ -143,6 +184,8 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("secrets", SecretsConfig),
         ("inventory", InventoryConfig),
         ("ledger", LedgerConfig),
+        ("weekly", WeeklyConfig),
+        ("research", ResearchConfig),
     ):
         _check_keys(section, raw[section], section_type)
 
@@ -185,6 +228,8 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
                 "origin_tools": tuple(ledger["origin_tools"]),
             }
         ),
+        weekly=WeeklyConfig(**{**raw["weekly"], "memory_excluded_origins": tuple(raw["weekly"]["memory_excluded_origins"])}),
+        research=ResearchConfig(**{**raw["research"], "public_path_fragments": tuple(raw["research"]["public_path_fragments"])}),
     )
 
 
@@ -192,3 +237,17 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> Config:
     """Read ``config.json`` from ``path``; any missing or unknown key raises."""
     with open(path, encoding="utf-8") as handle:
         return config_from_mapping(json.load(handle))
+
+
+def load_local_settings(path: str) -> LocalSettings:
+    """Read the machine's settings file. ``apply_memory_changes`` must be there and literally
+    true or false, so that nothing but a deliberate ``true`` lets a pass change a memory."""
+    with open(path, encoding="utf-8") as handle:
+        raw = json.load(handle)
+    _check_keys(path, raw, LocalSettings)
+    if not isinstance(raw["apply_memory_changes"], bool):
+        raise ValueError(f"{path}: apply_memory_changes must be true or false")
+    terms = raw["private_terms"]
+    if not isinstance(terms, list) or not all(isinstance(term, str) and term.strip() for term in terms):
+        raise ValueError(f"{path}: private_terms must be a list of non-empty strings")
+    return LocalSettings(raw["python_exe"], raw["apply_memory_changes"], tuple(terms))

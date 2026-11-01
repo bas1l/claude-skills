@@ -161,3 +161,41 @@ def test_missing_working_directory_raises(monkeypatch, config, tmp_path):
     fake_run(monkeypatch, json.dumps(good_result()))
     with pytest.raises(FileNotFoundError):
         call(config, tmp_path, cwd=os.path.join(str(tmp_path), "absent"))
+
+
+def _stream_lines(result):
+    lines = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "a", "name": "WebSearch", "input": {"query": "q"}},
+            {"type": "tool_use", "id": "b", "name": "WebFetch", "input": {"url": "https://example.org/"}},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "a", "content": [{"type": "text", "text": "found https://example.org/x"}]},
+        ]}},
+        result,
+    ]
+    return "\n".join(json.dumps(line) for line in lines)
+
+
+def test_research_command_uses_the_stream_output():
+    command = model_call.build_command("claude", model_call.RESEARCH_TOOLS, None, 1)
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in command
+    plain = model_call.build_command("claude", (), None, 1)
+    assert plain[plain.index("--output-format") + 1] == "json"
+
+
+def test_stream_gives_the_result_and_the_tool_calls_with_a_call_lacking_a_result_as_failed():
+    final, activity = model_call.parse_stream(_stream_lines(good_result()))
+    assert model_call.check_result(final, 0, "")["result"] == '{"notes": []}'
+    assert [(item.name, item.result_text, item.is_error) for item in activity] == [
+        ("WebSearch", "found https://example.org/x", False),
+        ("WebFetch", "", True),
+    ]
+
+
+def test_stream_without_a_result_line_fails_the_check():
+    final, _ = model_call.parse_stream(json.dumps({"type": "system"}))
+    with pytest.raises(model_call.ModelCallError):
+        model_call.check_result(final, 0, "")

@@ -173,6 +173,30 @@ def test_unbuilt_pass_fails_loudly(setup):
     assert "not built yet" in completed.stderr
 
 
+def test_weekly_pass_runs_writes_its_report_and_does_nothing_on_a_retry(setup):
+    config_path, data, projects = setup
+    (data / "local.json").write_text(
+        json.dumps({"python_exe": sys.executable, "apply_memory_changes": False, "private_terms": []}), encoding="utf-8"
+    )
+    add_session(projects, [human("hello", 1), assistant_text("Hi.", 2)])
+    completed = invoke(config_path, "weekly")
+    assert completed.returncode == 0, completed.stderr
+    assert len(list((data / "reports").rglob("report.json"))) == 1
+    assert marker_of(data) is None
+
+    retry = invoke(config_path, "weekly")
+    assert retry.returncode == 0, retry.stderr
+    result_files = sorted((data / "logs").glob("weekly-*.result.json"))
+    assert json.loads(result_files[-1].read_text(encoding="utf-8"))["skipped"] is True
+
+
+def test_weekly_pass_without_the_switch_in_local_settings_fails_loudly(setup):
+    config_path, data, _ = setup
+    completed = invoke(config_path, "weekly")
+    assert completed.returncode == 1
+    assert "failed" in json.dumps(marker_of(data))
+
+
 def test_unknown_origin_gives_non_zero_exit_and_a_marker_then_clears_on_a_clean_run(setup):
     config_path, data, projects = setup
     add_session(projects, [user_with_origin("from-the-future", "hello", 1)])

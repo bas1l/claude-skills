@@ -270,3 +270,262 @@ def validate_ledger(document: Any, where: str) -> None:
         raise SchemaError(f"{where}: entries must be a list")
     for index, entry in enumerate(document["entries"]):
         validate_ledger_entry(entry, f"{where} entry {index}")
+
+
+# ---------------------------------------------------------------------------
+# Weekly pass: memory changes, proposals and research, as the model returns them.
+# ---------------------------------------------------------------------------
+
+ACTION_CREATE = "create"
+ACTION_ADD = "add"
+ACTION_REPLACE = "replace"
+ACTION_REMOVE = "remove"
+ACTION_DELETE = "delete"
+MEMORY_ACTIONS = frozenset({ACTION_CREATE, ACTION_ADD, ACTION_REPLACE, ACTION_REMOVE, ACTION_DELETE})
+DELETING_ACTIONS = frozenset({ACTION_REMOVE, ACTION_DELETE})
+ENDORSED_SAID = "said"
+ENDORSED_RELIED_ON = "relied_on"
+MEMORY_CHANGE_FIELDS = frozenset({
+    "action", "memory", "note", "claim", "old_text", "endorsement", "quote", "assistant_statement", "title",
+})
+FACT_PROPOSAL_FIELDS = frozenset({"memory", "note", "claim"})
+
+PROPOSAL_KINDS = frozenset({"skill", "plugin", "hook", "mcp", "global_rule"})
+RESEARCHED_KINDS = frozenset({"skill", "plugin", "mcp"})
+KINDS_WITH_EXACT_CHANGE = frozenset({"plugin", "hook", "mcp", "global_rule"})
+CHANGE_NEW = "new"
+CHANGE_EXISTING = "change"
+BASIS_RECURRENCE = "recurrence"
+BASIS_COSTLY_ONCE = "costly_once"
+BASIS_FAILURE_COST = "failure_cost"
+BASIS_STATED_RULE = "stated_rule"
+PROPOSAL_BASES = frozenset({BASIS_RECURRENCE, BASIS_COSTLY_ONCE, BASIS_FAILURE_COST, BASIS_STATED_RULE})
+PROPOSAL_FIELDS = frozenset({
+    "kind", "change_type", "title", "what", "why", "target", "basis", "notes", "failure", "procedure",
+    "exact_change", "draft", "generic_description",
+})
+
+RECOMMENDATIONS = frozenset({"adopt", "adapt", "build"})
+RESEARCH_FIELDS = frozenset({
+    "search_worked", "official_features", "existing_tools", "conventions", "sources", "recommendation",
+    "recommendation_reason",
+})
+RESEARCH_TOOL_FIELDS = frozenset({"name", "url", "maintenance_evidence", "can_execute"})
+RESEARCH_SOURCE_FIELDS = frozenset({"url", "title", "used_for"})
+
+WEEKLY_REPORT_SCHEMA_VERSION = 1
+OUTCOME_APPLIED = "applied"
+OUTCOME_WOULD_APPLY = "would_apply"
+WEEKLY_CHANGE_OUTCOMES = frozenset({OUTCOME_APPLIED, OUTCOME_WOULD_APPLY})
+WEEKLY_REPORT_FIELDS = frozenset({
+    "schema_version", "week", "run_id", "generated_at", "status", "stop_reason", "apply_enabled", "coverage",
+    "memory_changes", "rejected", "proposals", "held", "failures_ranked", "before_after", "usage",
+})
+WEEKLY_CHANGE_FIELDS = frozenset({
+    "id", "project_folder", "memory", "action", "claim", "old_text", "endorsement", "quote", "assistant_statement",
+    "session", "source", "new_evidence", "outcome", "commit", "before", "after",
+})
+WEEKLY_REJECTED_FIELDS = frozenset({"subject", "project_folder", "reason", "detail", "claim", "quote", "source"})
+WEEKLY_PROPOSAL_FIELDS = frozenset({
+    "id", "kind", "change_type", "title", "what", "why", "target", "basis", "evidence", "exact_change", "draft_path",
+    "research", "status", "project_folder",
+})
+
+
+@dataclass(frozen=True)
+class MemoryChange:
+    action: str
+    memory: str
+    note: str
+    claim: str
+    old_text: str
+    endorsement: str
+    quote: str
+    assistant_statement: str
+    title: str
+
+
+@dataclass(frozen=True)
+class FactProposal:
+    memory: str
+    note: str
+    claim: str
+
+
+@dataclass(frozen=True)
+class MemoryReply:
+    changes: tuple[MemoryChange, ...]
+    fact_proposals: tuple[FactProposal, ...]
+
+
+@dataclass(frozen=True)
+class Proposal:
+    kind: str
+    change_type: str
+    title: str
+    what: str
+    why: str
+    target: str
+    basis: str
+    notes: tuple[str, ...]
+    failure: str
+    procedure: str
+    exact_change: str
+    draft: str
+    generic_description: str
+
+
+def _exact_fields(values: Any, wanted: frozenset[str], where: str) -> None:
+    if not isinstance(values, dict):
+        raise SchemaError(f"{where}: must be an object")
+    if set(values) != wanted:
+        raise SchemaError(f"{where}: missing {sorted(wanted - set(values))}, unknown {sorted(set(values) - wanted)}")
+
+
+def _string(values: Mapping[str, Any], key: str, where: str) -> str:
+    value = values[key]
+    if not isinstance(value, str):
+        raise SchemaError(f"{where}: {key} must be a string")
+    return value
+
+
+def _list_of(document: Mapping[str, Any], key: str) -> list[Any]:
+    if not isinstance(document[key], list):
+        raise SchemaError(f"{key!r} must be a list")
+    return document[key]
+
+
+def _single_json_object(raw: str, keys: frozenset[str]) -> dict[str, Any]:
+    reject_tool_call_text(raw)
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SchemaError(f"output is not a single JSON document: {error}") from error
+    if not isinstance(document, dict) or set(document) != keys:
+        raise SchemaError(f"output must be an object with exactly the keys {sorted(keys)}")
+    return document
+
+
+def validate_memory_change(values: Any, where: str) -> MemoryChange:
+    """Shape only. Whether the evidence holds is the quote gate's question."""
+    _exact_fields(values, MEMORY_CHANGE_FIELDS, where)
+    action = _enum(values, "action", MEMORY_ACTIONS, where)
+    endorsement = _enum(values, "endorsement", ENDORSEMENTS_WITH_QUOTE, where)
+    old_text = _string(values, "old_text", where)
+    if action in (ACTION_REPLACE, ACTION_REMOVE, ACTION_DELETE) and not old_text.strip():
+        raise SchemaError(f"{where}: action {action!r} needs old_text")
+    if action in (ACTION_CREATE, ACTION_ADD) and old_text:
+        raise SchemaError(f"{where}: action {action!r} must have empty old_text")
+    statement = _string(values, "assistant_statement", where)
+    if endorsement == ENDORSED_SAID and statement:
+        raise SchemaError(f"{where}: endorsement 'said' must have an empty assistant_statement")
+    if endorsement != ENDORSED_SAID and not statement.strip():
+        raise SchemaError(f"{where}: endorsement {endorsement!r} needs assistant_statement")
+    title = _string(values, "title", where)
+    if (action == ACTION_CREATE) != bool(title.strip()):
+        raise SchemaError(f"{where}: title is set exactly when creating a memory")
+    return MemoryChange(
+        action=action,
+        memory=_nonempty_string(values, "memory", where),
+        note=_nonempty_string(values, "note", where),
+        claim=_nonempty_string(values, "claim", where),
+        old_text=old_text,
+        endorsement=endorsement,
+        quote=_nonempty_string(values, "quote", where),
+        assistant_statement=statement,
+        title=title,
+    )
+
+
+def parse_memory_reply(raw: str) -> MemoryReply:
+    """Exactly ``{"changes": [...], "fact_proposals": [...]}`` and nothing else."""
+    document = _single_json_object(raw, frozenset({"changes", "fact_proposals"}))
+    changes = tuple(validate_memory_change(item, f"change {i}") for i, item in enumerate(_list_of(document, "changes")))
+    facts = []
+    for index, item in enumerate(_list_of(document, "fact_proposals")):
+        where = f"fact proposal {index}"
+        _exact_fields(item, FACT_PROPOSAL_FIELDS, where)
+        facts.append(FactProposal(
+            _nonempty_string(item, "memory", where), _nonempty_string(item, "note", where), _nonempty_string(item, "claim", where)
+        ))
+    return MemoryReply(changes, tuple(facts))
+
+
+def validate_proposal(values: Any, where: str) -> Proposal:
+    _exact_fields(values, PROPOSAL_FIELDS, where)
+    kind = _enum(values, "kind", PROPOSAL_KINDS, where)
+    change_type = _enum(values, "change_type", frozenset({CHANGE_NEW, CHANGE_EXISTING}), where)
+    target = _string(values, "target", where)
+    if change_type == CHANGE_EXISTING and not target.strip():
+        raise SchemaError(f"{where}: a change to an existing item must name it in target")
+    notes = values["notes"]
+    if not isinstance(notes, list) or not notes or not all(isinstance(note, str) and note for note in notes):
+        raise SchemaError(f"{where}: notes must be a non-empty list of note references")
+    exact_change = _string(values, "exact_change", where)
+    if kind in KINDS_WITH_EXACT_CHANGE and not exact_change.strip():
+        raise SchemaError(f"{where}: a {kind} proposal must show the exact command, config or text")
+    draft = _string(values, "draft", where)
+    if kind == "skill" and not draft.strip():
+        raise SchemaError(f"{where}: a skill proposal must hold a draft")
+    description = _string(values, "generic_description", where)
+    if kind in RESEARCHED_KINDS and change_type == CHANGE_NEW and not description.strip():
+        raise SchemaError(f"{where}: a new {kind} needs generic_description for research")
+    return Proposal(
+        kind=kind,
+        change_type=change_type,
+        title=_nonempty_string(values, "title", where),
+        what=_nonempty_string(values, "what", where),
+        why=_nonempty_string(values, "why", where),
+        target=target,
+        basis=_enum(values, "basis", PROPOSAL_BASES, where),
+        notes=tuple(notes),
+        failure=_string(values, "failure", where),
+        procedure=_string(values, "procedure", where),
+        exact_change=exact_change,
+        draft=draft,
+        generic_description=description,
+    )
+
+
+def parse_proposals(raw: str) -> tuple[Proposal, ...]:
+    """Exactly ``{"proposals": [...]}`` and nothing else."""
+    document = _single_json_object(raw, frozenset({"proposals"}))
+    return tuple(validate_proposal(item, f"proposal {i}") for i, item in enumerate(_list_of(document, "proposals")))
+
+
+def parse_research(raw: str) -> dict[str, Any]:
+    """The research reply as validated data. Comparing it with what was searched is research.py's."""
+    document = _single_json_object(raw, RESEARCH_FIELDS)
+    if not isinstance(document["search_worked"], bool):
+        raise SchemaError("search_worked must be true or false")
+    for key in ("official_features", "conventions", "recommendation_reason"):
+        _nonempty_string(document, key, "research")
+    _enum(document, "recommendation", RECOMMENDATIONS, "research")
+    for index, tool in enumerate(_list_of(document, "existing_tools")):
+        where = f"research tool {index}"
+        _exact_fields(tool, RESEARCH_TOOL_FIELDS, where)
+        for key in RESEARCH_TOOL_FIELDS:
+            _nonempty_string(tool, key, where)
+    for index, source in enumerate(_list_of(document, "sources")):
+        where = f"research source {index}"
+        _exact_fields(source, RESEARCH_SOURCE_FIELDS, where)
+        for key in RESEARCH_SOURCE_FIELDS:
+            _nonempty_string(source, key, where)
+    return document
+
+
+def validate_weekly_report(document: Any, where: str) -> None:
+    """Raise unless this is a well-formed weekly report. The format is described in weekly.py."""
+    _exact_fields(document, WEEKLY_REPORT_FIELDS, where)
+    if document["schema_version"] != WEEKLY_REPORT_SCHEMA_VERSION:
+        raise SchemaError(f"{where}: schema_version {document['schema_version']!r}")
+    if not isinstance(document["apply_enabled"], bool):
+        raise SchemaError(f"{where}: apply_enabled must be true or false")
+    for index, change in enumerate(document["memory_changes"]):
+        _exact_fields(change, WEEKLY_CHANGE_FIELDS, f"{where} change {index}")
+        _enum(change, "outcome", WEEKLY_CHANGE_OUTCOMES, f"{where} change {index}")
+    for index, rejected in enumerate(document["rejected"]):
+        _exact_fields(rejected, WEEKLY_REJECTED_FIELDS, f"{where} rejected {index}")
+    for key in ("proposals", "held"):
+        for index, proposal in enumerate(document[key]):
+            _exact_fields(proposal, WEEKLY_PROPOSAL_FIELDS, f"{where} {key} {index}")

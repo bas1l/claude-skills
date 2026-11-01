@@ -182,3 +182,94 @@ def test_fabricated_quote_fails():
 def test_empty_quote_raises():
     with pytest.raises(ValueError):
         quotes.quote_is_in_user_entries("  ", [entry(t.USER_TYPED, "x")])
+
+
+def _change(**overrides):
+    values = {
+        "action": "create", "memory": "m", "note": "n1", "claim": "c", "old_text": "", "endorsement": "said",
+        "quote": "q", "assistant_statement": "", "title": "t",
+    }
+    values.update(overrides)
+    return values
+
+
+def _memory_reply(*changes):
+    return json.dumps({"changes": list(changes), "fact_proposals": []})
+
+
+def test_memory_reply_rules():
+    assert schemas.parse_memory_reply(_memory_reply(_change())).changes[0].memory == "m"
+    for bad in (
+        _change(action="delete", title=""),
+        _change(action="add", title="", old_text="x"),
+        _change(endorsement="none"),
+        _change(endorsement="accepted"),
+        _change(endorsement="said", assistant_statement="x"),
+        _change(title=""),
+        _change(action="add"),
+        {**_change(), "extra": 1},
+    ):
+        with pytest.raises(schemas.SchemaError):
+            schemas.parse_memory_reply(_memory_reply(bad))
+    with pytest.raises(schemas.SchemaError):
+        schemas.parse_memory_reply('{"changes": []}')
+    with pytest.raises(schemas.SchemaError):
+        schemas.parse_memory_reply('<invoke name="Write">')
+
+
+def _proposal(**overrides):
+    values = {
+        "kind": "hook", "change_type": "new", "title": "t", "what": "w", "why": "y", "target": "", "basis": "recurrence",
+        "notes": ["n1"], "failure": "", "procedure": "", "exact_change": "command", "draft": "", "generic_description": "",
+    }
+    values.update(overrides)
+    return values
+
+
+def test_proposal_rules_show_the_exact_change_and_store_a_draft():
+    assert schemas.parse_proposals(json.dumps({"proposals": [_proposal()]}))[0].kind == "hook"
+    for bad in (
+        _proposal(exact_change=""),
+        _proposal(kind="mcp", exact_change=" "),
+        _proposal(kind="skill", change_type="change", target="s", exact_change="", draft=""),
+        _proposal(kind="skill", exact_change="", draft="d", generic_description=""),
+        _proposal(kind="plugin", generic_description=""),
+        _proposal(change_type="change", target=""),
+        _proposal(notes=[]),
+        _proposal(basis="because"),
+    ):
+        with pytest.raises(schemas.SchemaError):
+            schemas.parse_proposals(json.dumps({"proposals": [bad]}))
+
+
+def test_research_reply_rules():
+    good = {
+        "search_worked": True, "official_features": "o", "existing_tools": [], "conventions": "c",
+        "sources": [{"url": "https://example.org", "title": "t", "used_for": "u"}],
+        "recommendation": "build", "recommendation_reason": "r",
+    }
+    assert schemas.parse_research(json.dumps(good))["recommendation"] == "build"
+    for bad in (
+        {**good, "recommendation": "maybe"},
+        {**good, "search_worked": "yes"},
+        {**good, "existing_tools": [{"name": "n"}]},
+        {key: value for key, value in good.items() if key != "sources"},
+    ):
+        with pytest.raises(schemas.SchemaError):
+            schemas.parse_research(json.dumps(bad))
+
+
+def test_reaction_gate_needs_the_statement_just_before_the_quote():
+    def entry(kind, text, minute, source="main"):
+        return t.Entry(kind=kind, timestamp=datetime(2030, 1, 1, 10, minute, tzinfo=timezone.utc), text=text, source=source, cwd="/")
+
+    entries = [
+        entry(t.ASSISTANT_TEXT, "The limit is five.", 1),
+        entry(t.USER_TYPED, "yes", 2),
+        entry(t.ASSISTANT_TEXT, "Other.", 3),
+        entry(t.USER_TYPED, "fine", 4),
+    ]
+    assert quotes.quote_is_reaction_to("yes", "limit is five", entries)
+    assert not quotes.quote_is_reaction_to("fine", "limit is five", entries)
+    assert not quotes.quote_is_reaction_to("yes", "limit is six", entries)
+    assert not quotes.quote_is_reaction_to("The limit", "limit is five", entries)

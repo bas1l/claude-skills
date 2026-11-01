@@ -204,3 +204,26 @@ def chunk_input_text(chunk: Chunk, timeline: str) -> str:
         f"<session_part number=\"{chunk.number}\" of=\"{chunk.total}\">"
         f"{chunk.entries_text}\n</session_part>\n"
     )
+
+
+def render_exchanges(entries: Iterable[t.Entry], cuts: CutsConfig, secrets: SecretsConfig, assistant_chars: int) -> str:
+    """Each of the user's messages with the end of the assistant text just before it.
+
+    This is enough source for a reader to quote the user and to name what the user reacted
+    to. Assistant text is cut to its last ``assistant_chars``, where a statement that invites
+    a reaction usually sits.
+    """
+    if assistant_chars <= 0:
+        raise ValueError(f"assistant_chars must be positive: {assistant_chars}")
+    parts = []
+    pending = ""
+    for entry in render_entries(entries, cuts, secrets):
+        if entry.kind == t.ASSISTANT_TEXT:
+            pending = entry.text
+        elif entry.kind in t.USER_OWN_KINDS:
+            if pending:
+                cut = len(pending) - assistant_chars
+                parts.append(pending if cut <= 0 else f"\n=== [ASSISTANT-TEXT] ...[CUT {cut} chars]\n{pending[cut:]}")
+                pending = ""
+            parts.append(entry.text)
+    return "".join(parts)

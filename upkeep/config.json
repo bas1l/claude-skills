@@ -81,5 +81,31 @@
     "inferred_window_days": 28,
     "stated_limit_patterns": ["(?i)\\bfor now\\b", "(?i)\\bfor the moment\\b", "(?i)\\bfor the time being\\b", "(?i)\\binterim\\b", "(?i)\\buntil further notice\\b"],
     "origin_tools": ["Write", "Edit"]
+  },
+  "weekly": {
+    "memory_model": "opus",
+    "proposal_model": "opus",
+    "recurrence_sessions": 3,
+    "costly_once_tool_calls": 50,
+    "failure_min_commands_lost": 5,
+    "failures_shown": 30,
+    "max_deletions_per_pass": 5,
+    "quote_failure_batch_min": 3,
+    "said_quote_shared_word_letters": 4,
+    "group_chars": 400000,
+    "source_assistant_chars": 1500,
+    "claim_max_chars": 500,
+    "title_max_chars": 60,
+    "index_hook_chars": 150,
+    "reproposal_word_overlap": 0.6,
+    "memory_excluded_origins": ["web"]
+  },
+  "research": {
+    "model": "sonnet",
+    "budget_per_candidate_usd": 3,
+    "max_per_pass": 3,
+    "description_max_chars": 600,
+    "memory_shingle_words": 6,
+    "public_path_fragments": ["~/.claude/", ".claude/"]
   }
 }

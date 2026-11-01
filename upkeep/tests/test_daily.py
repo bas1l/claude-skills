@@ -192,6 +192,57 @@ def test_interrupted_run_resumes_without_duplicates_or_loss(tree):
     assert state_entries(tree)[f"proj/{SESSION_ID}"]["pending"] is None
 
 
+def test_window_whose_records_changed_is_discarded_and_read_again_without_duplicates(tree):
+    tree = dataclasses.replace(tree, chunking=dataclasses.replace(tree.chunking, chunk_chars=40))
+    memory = Path(tree.paths.projects_dir) / "proj" / "memory" / "a-memory.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("---\nname: a-memory\ndescription: test\n---\n\nBody.\n", encoding="utf-8")
+    path = add_session(tree, "proj", SESSION_ID, [*chat(1, "first message"), *chat(10, "second message")])
+    named = note(endorsement_quote="first message", items=[{"kind": "memory", "name": "a-memory", "stance": "for"}])
+
+    first = daily.run_daily(tree, "r1", call=FakeCall(reply_of(named), "not json"))
+    assert first["status"] == daily.STATUS_FAILED
+    assert len(notes_on_disk(tree)) == 1
+    ledgers_dir = ledger.ledgers_dir_of(tree.paths.data_dir)
+    item = ledger.ItemId(ledger.project_scope("proj"), "memory", "a-memory")
+    assert len(ledger.load_ledger(ledgers_dir, item)["entries"]) == 1
+
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({**human("a late record", 5), "sessionId": SESSION_ID}) + "\n")
+    touch_after_fixture_times(path)
+
+    second = daily.run_daily(tree, "r2", call=FakeCall(reply_of(note(endorsement_quote="a late record"))))
+    assert second["status"] == daily.STATUS_OK
+    assert [reset["session"] for reset in second["windows_reset"]] == [f"proj/{SESSION_ID}"]
+    assert second["windows_reset"][0]["ledger_entries_discarded"] == 1
+    quotes_on_disk = [item["endorsement_quote"] for item in notes_on_disk(tree)]
+    assert "first message" not in quotes_on_disk
+    assert len(ledger.load_ledger(ledgers_dir, item)["entries"]) == 0
+    assert state_entries(tree)[f"proj/{SESSION_ID}"]["pending"] is None
+
+    third = daily.run_daily(tree, "r3", call=FakeCall(reply_of()))
+    assert third["sessions_selected"] == 0
+    assert third["windows_reset"] == []
+
+
+def test_window_that_still_differs_after_the_reset_fails_that_session(tree, monkeypatch):
+    add_session(tree, "proj", SESSION_ID, chat(1))
+    add_session(tree, "proj", OTHER_ID, chat(20))
+    real = daily._process_read
+
+    def always_differs(item, *arguments):
+        if item.files.session_id == SESSION_ID:
+            raise daily.extract.WindowMismatchError("differs again")
+        return real(item, *arguments)
+
+    monkeypatch.setattr(daily, "_process_read", always_differs)
+    result = daily.run_daily(tree, "r1", call=FakeCall(reply_of()))
+    assert result["status"] == daily.STATUS_FAILED
+    assert [item["session"] for item in result["failed_sessions"]] == [f"proj/{SESSION_ID}"]
+    assert len(result["windows_reset"]) == 1
+    assert result["sessions_read"] == 1
+
+
 def test_unknown_origin_stops_run_and_leaves_session_unprocessed(tree):
     add_session(tree, "proj", SESSION_ID, [user_with_origin("from-the-future", "hello", 1)])
     result = daily.run_daily(tree, "r1", call=FakeCall(reply_of()))

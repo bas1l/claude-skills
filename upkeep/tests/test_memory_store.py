@@ -200,3 +200,53 @@ def test_git_commands_ignore_inherited_repository_variables(projects, tmp_path, 
     folder = projects / "proj-a" / "memory"
     ms.init_memory_repo(str(folder), IDENTITY)
     assert os.path.isdir(folder / ".git")
+
+
+def test_apply_makes_one_commit_with_only_its_files_and_refuses_a_second_in_the_week(tmp_path):
+    folder = tmp_path / "memory"
+    folder.mkdir()
+    (folder / "a.md").write_bytes(b"old\n")
+    (folder / "MEMORY.md").write_text("- [A](a.md) \u2014 a\n", encoding="utf-8")
+    ms.init_memory_repo(str(folder), IDENTITY)
+    (folder / "live.md").write_text("from a live session\n", encoding="utf-8")
+
+    writes = [ms.FileWrite("a.md", "old\n", "new\n"), ms.FileWrite("b.md", None, "made\n")]
+    index = [ms.IndexEdit("b.md", "- [B](b.md) \u2014 b")]
+    outcome = ms.apply_memory_writes(str(folder), writes, index, IDENTITY, "2031-W01", "message")
+
+    assert outcome["conflicts"] == []
+    assert (folder / "a.md").read_bytes() == b"new\n"
+    assert "(b.md)" in (folder / "MEMORY.md").read_text(encoding="utf-8")
+    subjects = git(folder, "log", "--format=%s").stdout.splitlines()
+    assert subjects[0] == "message"
+    assert subjects[1].startswith("Snapshot of edits")
+    shown = git(folder, "show", "--name-only", "--format=", "HEAD").stdout.split()
+    assert sorted(shown) == ["MEMORY.md", "a.md", "b.md"]
+    assert ms.week_already_applied(str(folder), "2031-W01")
+    assert not ms.week_already_applied(str(folder), "2031-W02")
+    with pytest.raises(ms.MemoryStoreError, match="already holds"):
+        ms.apply_memory_writes(str(folder), writes, index, IDENTITY, "2031-W01", "message")
+
+
+def test_apply_leaves_a_file_that_changed_since_and_creates_a_repository_in_an_empty_folder(tmp_path):
+    folder = tmp_path / "memory"
+    outcome = ms.apply_memory_writes(
+        str(folder), [ms.FileWrite("c.md", None, "made\n")], [ms.IndexEdit("c.md", "- [C](c.md) \u2014 c")],
+        IDENTITY, "2031-W01", "message",
+    )
+    assert outcome["commit"] and ms.has_push_guard(str(folder))
+
+    (folder / "c.md").write_text("changed by a live session\n", encoding="utf-8")
+    outcome = ms.apply_memory_writes(
+        str(folder), [ms.FileWrite("c.md", "made\n", "newer\n")], [], IDENTITY, "2031-W02", "message",
+    )
+    assert outcome == {"commit": None, "conflicts": ["c.md"]}
+    assert (folder / "c.md").read_text(encoding="utf-8") == "changed by a live session\n"
+
+
+def test_edits_stay_out_of_the_frontmatter_and_need_a_single_match():
+    text = "---\nname: x\n---\n\nBody one. Body one.\nname: x\n"
+    with pytest.raises(ms.MemoryEditError):
+        ms.replace_in_memory(text, "Body one.", "z")
+    assert ms.replace_in_memory(text, "name: x\n", "z\n").startswith("---\nname: x\n---\n")
+    assert ms.remove_from_memory("Keep.\n\nDrop.\n", "Drop.") == "Keep.\n"

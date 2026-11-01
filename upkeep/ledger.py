@@ -6,6 +6,7 @@ One JSON file per item, under the data folder:
     ledgers/projects/<folder>/memory/<name>.json   memories, scoped by their project folder
     ledgers/revision-flags.json                    items that lost balance, rewritten each run
     ledgers/unmapped-mentions.json                 note mentions that could not become entries
+    ledgers/review-decisions.json                  changes and proposals the user undid or rejected
 
 What this module holds to:
 
@@ -50,6 +51,11 @@ OUTCOME_UNCHANGED = "unchanged"
 
 FLAGS_FILE = "revision-flags.json"
 UNMAPPED_FILE = "unmapped-mentions.json"
+DECISIONS_FILE = "review-decisions.json"
+DECISIONS_SCHEMA_VERSION = 1
+DECISION_UNDONE = "undone"
+DECISION_REJECTED = "rejected"
+DECISION_FIELDS = frozenset({"id", "decided_at", "decision", "scope", "kind", "name", "action", "claim", "week"})
 REPORTS_SCHEMA_VERSION = 1
 
 REASON_DIRECT = "direct_statement_against"
@@ -364,3 +370,54 @@ def apply_notes(notes_dir: str, ledgers_dir: str) -> dict[str, Any]:
         {"schema_version": REPORTS_SCHEMA_VERSION, "mentions": unmapped},
     )
     return {**summary, "mentions_unmapped": len(unmapped)}
+
+
+def discard_entries_from_notes(ledgers_dir: str, notes_prefix: str) -> int:
+    """Take out entries whose source notes were discarded, so that a window read again cannot
+    keep what its old reading said. Returns how many were taken out."""
+    removed = 0
+    for top in ("global", "projects"):
+        for directory, _, names in os.walk(os.path.join(ledgers_dir, top)):
+            for name in names:
+                path = os.path.join(directory, name)
+                document = _read_ledger_file(path)
+                kept = [entry for entry in document["entries"] if not entry["source"]["notes"].startswith(notes_prefix)]
+                if len(kept) != len(document["entries"]):
+                    removed += len(document["entries"]) - len(kept)
+                    document["entries"] = kept
+                    _write_json_atomic(path, document)
+    return removed
+
+
+def _check_decision(decision: Mapping[str, Any], where: str) -> None:
+    if set(decision) != DECISION_FIELDS or decision["decision"] not in (DECISION_UNDONE, DECISION_REJECTED):
+        raise LedgerError(f"{where}: malformed decision {sorted(decision)}")
+    if datetime.fromisoformat(decision["decided_at"]).tzinfo is None:
+        raise LedgerError(f"{where}: decision {decision['id']!r} has no UTC offset")
+
+
+def load_decisions(ledgers_dir: str) -> list[dict[str, Any]]:
+    """Every recorded undo and rejection. No file means none has been made yet."""
+    path = os.path.join(ledgers_dir, DECISIONS_FILE)
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    if document.get("schema_version") != DECISIONS_SCHEMA_VERSION:
+        raise LedgerError(f"{path}: schema_version {document.get('schema_version')!r}")
+    for decision in document["decisions"]:
+        _check_decision(decision, path)
+    return document["decisions"]
+
+
+def record_decision(ledgers_dir: str, decision: Mapping[str, Any]) -> bool:
+    """Record an undo or rejection, for the review step. Returns False if already recorded."""
+    _check_decision(decision, "new decision")
+    decisions = load_decisions(ledgers_dir)
+    if any(existing["id"] == decision["id"] for existing in decisions):
+        return False
+    _write_json_atomic(
+        os.path.join(ledgers_dir, DECISIONS_FILE),
+        {"schema_version": DECISIONS_SCHEMA_VERSION, "decisions": [*decisions, dict(decision)]},
+    )
+    return True

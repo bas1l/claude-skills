@@ -13,8 +13,13 @@ What stops a run, and what does not:
 
     TranscriptFormatError  stops: the transcript format changed, so later sessions would fail too
     ModelCallError         stops: limits, login and network failures repeat for each call
-    SchemaError, a window that differs from the one recorded, a call timeout
+    SchemaError, a call timeout
                            that session only: listed with its id, the others continue
+
+A window whose records changed after an interruption no longer matches its recorded chunks.
+Its partial results and the ledger entries drawn from them are discarded, and the window is
+read again once in the same run, listed under ``windows_reset``. If it still does not match,
+that session fails like the others.
 
 Written under the data folder:
 
@@ -156,6 +161,19 @@ def _process_read(
     return summary
 
 
+def _discard_window(item: sessions.WorkItem, config: Config) -> dict[str, Any]:
+    """Remove what a window has on disk, and any ledger entry drawn from it."""
+    prefix = f"notes/{window_date(item)}/{window_name(item)}/"
+    entries = ledger.discard_entries_from_notes(ledger.ledgers_dir_of(config.paths.data_dir), prefix)
+    out_dir = notes_dir_of(item, config)
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)
+    counts_path = counts_path_of(item, config)
+    if os.path.exists(counts_path):
+        os.remove(counts_path)
+    return {"ledger_entries_discarded": entries}
+
+
 def _missing_pinned_sessions(state: Mapping[str, Any], discovered: Sequence[sessions.SessionFiles]) -> list[str]:
     """Pinned windows whose transcript is gone: they can never finish, so they are failures."""
     known = {files.state_key for files in discovered}
@@ -201,6 +219,7 @@ def run_daily(
     processed_count_only = 0
     notes = 0
     secrets_redacted = 0
+    windows_reset: list[dict[str, Any]] = []
 
     try:
         discovered = sessions.discover_sessions(config.paths.projects_dir)
@@ -227,9 +246,13 @@ def run_daily(
                     secrets_redacted += _process_count_only(item, config, run_id)
                     processed_count_only += 1
                 else:
-                    summary = _process_read(
-                        item, config, run_id, config.model.run_budget_usd - totals.cost_usd, totals.wrap(call, key)
-                    )
+                    tracked_call = totals.wrap(call, key)
+                    try:
+                        summary = _process_read(item, config, run_id, config.model.run_budget_usd - totals.cost_usd, tracked_call)
+                    except extract.WindowMismatchError as mismatch:
+                        windows_reset.append({"session": key, "reason": str(mismatch), **_discard_window(item, config)})
+                        print(f"WINDOW RESET {key}: {mismatch}", file=sys.stderr, flush=True)
+                        summary = _process_read(item, config, run_id, config.model.run_budget_usd - totals.cost_usd, tracked_call)
                     notes += summary["notes"]
                     secrets_redacted += summary["secrets_redacted"]
                     processed_read += 1
@@ -274,6 +297,7 @@ def run_daily(
         "backlog_sessions": backlog,
         "notes": notes,
         "secrets_redacted": secrets_redacted,
+        "windows_reset": windows_reset,
         "model_calls": totals.calls,
         "tokens": totals.tokens,
         "cost_usd": round(totals.cost_usd, 4),

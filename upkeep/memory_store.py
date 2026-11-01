@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 from config import Config, MemoryConfig, load_config
@@ -212,6 +213,176 @@ def snapshot_all(projects_dir: str, identity: MemoryConfig, message: str) -> dic
         except MemoryStoreError as error:
             errors.append({"project_folder": project, "error": str(error)})
     return {**results, "errors": errors}
+
+
+INDEX_FILE = "MEMORY.md"
+WEEK_TRAILER = "Upkeep-Week"
+_FRONT_MATTER_FENCE = "---"
+
+
+class MemoryEditError(ValueError):
+    """An edit does not fit the file as it stands."""
+
+
+def read_memory_file(path: str) -> Optional[str]:
+    """A memory's exact text, line endings included, or None if it does not exist."""
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def _body_start(text: str) -> int:
+    """Where a memory's body begins, after any frontmatter."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != _FRONT_MATTER_FENCE:
+        return 0
+    offset = len(lines[0])
+    for line in lines[1:]:
+        offset += len(line)
+        if line.strip() == _FRONT_MATTER_FENCE:
+            return offset
+    raise MemoryEditError("frontmatter is never closed")
+
+
+def _locate_in_body(text: str, old_text: str) -> int:
+    start = _body_start(text)
+    count = text.count(old_text, start)
+    if count != 1:
+        raise MemoryEditError(f"old_text occurs {count} times in the body, must be exactly once")
+    return text.index(old_text, start)
+
+
+def add_to_memory(text: str, addition: str) -> str:
+    return f"{text.rstrip()}\n\n{addition}\n"
+
+
+def replace_in_memory(text: str, old_text: str, new_text: str) -> str:
+    position = _locate_in_body(text, old_text)
+    return text[:position] + new_text + text[position + len(old_text):]
+
+
+def remove_from_memory(text: str, old_text: str) -> str:
+    position = _locate_in_body(text, old_text)
+    remaining = text[:position] + text[position + len(old_text):]
+    return f"{remaining.rstrip()}\n"
+
+
+def check_old_text(text: str, old_text: str) -> None:
+    """Raise unless ``old_text`` occurs exactly once in the body."""
+    _locate_in_body(text, old_text)
+
+
+def index_line(title: str, file_name: str, hook: str) -> str:
+    return f"- [{title}]({file_name}) \u2014 {hook}"
+
+
+def index_with_line(index_text: Optional[str], line: str) -> str:
+    return f"{line}\n" if not index_text else f"{index_text.rstrip()}\n{line}\n"
+
+
+def index_without_file(index_text: Optional[str], file_name: str) -> Optional[str]:
+    if index_text is None:
+        return None
+    return "".join(line for line in index_text.splitlines(keepends=True) if f"]({file_name})" not in line)
+
+
+@dataclass(frozen=True)
+class FileWrite:
+    """The new text of one file, or None to delete it, with the text it was worked out from."""
+
+    relative: str
+    expected_before: Optional[str]
+    content: Optional[str]
+
+
+@dataclass(frozen=True)
+class IndexEdit:
+    """A change to the index, worked out on the index as it stands when applying, because
+    live sessions add lines to it. ``line`` None takes the file's line out."""
+
+    file_name: str
+    line: Optional[str]
+
+
+def week_already_applied(folder: str, week: str) -> bool:
+    """True if this folder holds a commit of this week's pass. An unborn repository has none."""
+    if not os.path.isdir(folder) or classify(folder) != STATE_ADOPTABLE:
+        return False
+    if _run_git(folder, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode != 0:
+        return False
+    found = _run_git(folder, "log", "--fixed-strings", f"--grep={WEEK_TRAILER}: {week}", "--format=%H")
+    return bool(found.stdout.strip())
+
+
+def _prepare_folder_for_writing(folder: str, identity: MemoryConfig, snapshot_message: str) -> None:
+    os.makedirs(folder, exist_ok=True)
+    state = classify(folder)
+    if state == STATE_EMPTY:
+        _create_guarded_repo(folder, identity, MEMORY_GUARD)
+    elif state == STATE_NEW:
+        init_memory_repo(folder, identity)
+    elif state == STATE_ADOPTABLE:
+        commit_all(folder, identity, snapshot_message)
+    else:
+        raise MemoryStoreError(f"{folder}: state {state!r}; refusing to commit here")
+
+
+def apply_memory_writes(
+    folder: str,
+    writes: Sequence[FileWrite],
+    index_edits: Sequence[IndexEdit],
+    identity: MemoryConfig,
+    week: str,
+    message: str,
+) -> dict[str, Any]:
+    """One commit for one pass in one folder.
+
+    What live sessions left is committed first, on its own. A file that changed since its new
+    text was worked out is left alone and listed in ``conflicts``; the others go ahead. Only
+    the files written are in the commit, so a live edit arriving meanwhile stays out of it.
+    A folder that already holds this week's commit raises.
+    """
+    if week_already_applied(folder, week):
+        raise MemoryStoreError(f"{folder}: already holds a commit of {week}")
+    _prepare_folder_for_writing(folder, identity, f"Snapshot of edits by live sessions, before upkeep {week}")
+    conflicts = []
+    paths = []
+    for write in writes:
+        path = os.path.join(folder, write.relative)
+        if read_memory_file(path) != write.expected_before:
+            conflicts.append(write.relative)
+            continue
+        if write.content is None:
+            os.remove(path)
+        else:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(write.content)
+        paths.append(write.relative)
+    if not paths:
+        return {"commit": None, "conflicts": conflicts}
+    index_path = os.path.join(folder, INDEX_FILE)
+    index_text = read_memory_file(index_path)
+    edited = False
+    for edit in index_edits:
+        if edit.file_name in conflicts:
+            continue
+        index_text = index_without_file(index_text, edit.file_name)
+        if edit.line is not None:
+            index_text = index_with_line(index_text, edit.line)
+        edited = True
+    if edited and index_text is not None:
+        with open(index_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(index_text)
+        paths.append(INDEX_FILE)
+    _run_git(folder, "add", "--all", "--", *paths)
+    _run_git(
+        folder,
+        "-c", f"user.name={identity.author_name}",
+        "-c", f"user.email={identity.author_email}",
+        "commit", "--quiet", "--message", f"{message}\n\n{WEEK_TRAILER}: {week}", "--", *paths,
+    )
+    return {"commit": _run_git(folder, "rev-parse", "HEAD").stdout.strip(), "conflicts": conflicts}
 
 
 def plan_memory_repos(projects_dir: str) -> list[dict[str, Any]]:

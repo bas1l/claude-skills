@@ -196,6 +196,19 @@ These came from running Phase 1 code on real data. Measured figures stay in loca
 - **Notes written before schema version 2 cannot name items:** they hold no field for it and no stance, so they add no entries.
 - **A real tool-less model call** with the changed prompt, on a synthetic session, returned valid `items`: `against` for a memory the user corrected, `for` for a hook that worked, and nothing for a skill mentioned as unused.
 
+## Found while building the weekly pass
+
+- **The ledgers folder holds two more files than items:** `revision-flags.json` and `unmapped-mentions.json` sit beside the ledgers, by design. Every ledger file has a distinct identity, so there are no duplicates.
+- **A window that stuck now recovers by itself.** The limit recorded above is closed: its partial results and the ledger entries drawn from them are discarded, the window is read once more in the same run, and the run lists it under `windows_reset`, which also adds a `window_reset` entry to the failure marker. If it still differs, that session fails and is listed.
+- **What was searched comes from the run, not the model.** A research call uses `--output-format stream-json --verbose`, the form Phase 0 tested, and the script reads each tool call and result from it. A link that appears in no tool result rejects the proposal.
+- **`apply_memory_changes` has no value in code.** The key must be in the local settings file and literally true or false; a missing key stops the weekly pass. Its value is false until the dry run has been reviewed.
+- **Undo and rejection are recorded in `ledgers/review-decisions.json`,** through `ledger.record_decision`, because a rejected new skill has no ledger of its own to hold an entry. A model will reword a claim, so a match is the same item and action, or wording sharing a set share of its words. The review step writes these; the plan's "entries against" are left for it to add, since an undone change is not by itself evidence against the memory it touched.
+
+- **The check on queries fired on the first real research run,** on a query naming the product's own settings folder. That folder is public documentation and not private, so `research.public_path_fragments` lists it for queries only; a description still may not hold it. A refused query is now named in the stop reason, since the first refusal left nothing to read.
+- **A real quote can sit beside a claim it does not state.** The gate now refuses a `said` quote sharing no word of 4 or more letters with its claim. This catches a plain mismatch only: it cannot tell that the words mean the same, so whether a quote supports a claim stays a question for review.
+- **Error signatures can hide the error.** A signature is the first 70 characters of the error text, so a line printed by the shell's start-up file can fill it, and different failures then group by that line. Ranking by commands lost inherits this. `counts.signature_chars` or a filter of such lines is a change for later.
+- **Research under S4U is still not verified** (see 0.4). The dry run ran in a user process.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.
