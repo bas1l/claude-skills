@@ -232,6 +232,17 @@ These came from running Phase 1 code on real data. Measured figures stay in loca
 - **A research reply of `adapt` can mean little.** The real run's two replacement findings both said `adapt`, with a reason saying that nothing found fits and the content has to be written anyway. The pass makes a finding from any `adopt` or `adapt` that names a tool, so these reach the review as they are.
 - **Research for a month's skills is taken in name order at first,** so the reference skills came up first.
 
+## Found while building the schedule
+
+- **"First Saturday" needs XML.** `New-ScheduledTaskTrigger` has no monthly form, so tasks are written as XML with `ScheduleByMonthDayOfWeek`. The Task Scheduler read one back as trigger type 5, week mask 1, day mask 64 and month mask 4095, which is the first Saturday of all 12 months. A week of 9 was refused, so the parse does check. No fire time was observed: the scheduler computes those only for a registered task.
+- **Definitions can be checked unelevated, without registering.** `RegisterTask` with `TASK_VALIDATE_ONLY` accepted an S4U definition from a Medium-integrity process and registered nothing, as a lookup afterwards confirmed. `-PlanOnly` uses it. **Not verified:** the same call with `TASK_CREATE_OR_UPDATE` from an elevated window, which also reads the logon type back and stops if it is not S4U.
+- **A held lock used to be silent.** The run exited 2 with no marker. If the weekly pass met the daily's lock at both 02:00 and 05:30 the week would pass unseen, and a monthly pass would wait a month. It now adds a `failed` entry, which that pass's next clean run clears. It is written without the lock, so a pass ending at that instant could overwrite it.
+- **`-CheckResearch` replaces the paste script in 0.4,** and runs the weekly pass's own code and flags. It also requires a page to be fetched, the open point in 0.4, and `git` on the path. Run through `Invoke-Upkeep.ps1` in a user process with real calls: exit 0, 4 searches, 6 fetches, 50 seconds, $0.15. **Under S4U it is still not verified;** that run is the user's, after the merge.
+- **The hook in a real session start,** with a synthetic marker and `claude -p --include-hook-events`: the `SessionStart:startup` event gave exit 0 and the expected `systemMessage`. With `disableAllHooks`, 0 hook events. The silent path took 137 ms including interpreter start. The line appearing in the interactive interface was not observed; `systemMessage` is what the message clock hook already shows there.
+- **The line holds no free text from the marker.** A marker's summary can hold a pass's error output, so the hook prints only pass, kind and time, each checked by pattern. It is not sent to the model.
+- **The review layout matches the install.** The review folder, the skill's `review_session.py` path and the shortcut's target all resolve under the home directory, and only the installed scripts are missing until the merge.
+- **A monthly pass that fails has no retry** until the next month or a hand run. The plan sets one trigger; the warning stays until then.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.

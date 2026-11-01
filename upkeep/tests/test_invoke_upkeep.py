@@ -97,7 +97,7 @@ def test_clean_run_exits_zero_removes_lock_and_leaves_no_marker(setup):
     assert json.loads((data / "logs" / "runs.jsonl").read_text(encoding="utf-8").splitlines()[0])["status"] == "ok"
 
 
-def test_live_lock_exits_non_zero_and_is_left_alone(setup):
+def test_live_lock_exits_non_zero_is_left_alone_and_reported_until_a_clean_run(setup):
     config_path, data, _ = setup
     holder = subprocess.Popen(
         [pwsh(), "-NoProfile", "-NonInteractive", "-Command",
@@ -113,6 +113,12 @@ def test_live_lock_exits_non_zero_and_is_left_alone(setup):
     assert completed.returncode == 2
     assert "Another upkeep run is live" in completed.stderr
     assert (data / "upkeep.lock").exists()
+    entry = marker_of(data)["entries"][0]
+    assert entry["kind"] == "failed" and entry["pass"] == "daily" and entry["exit_code"] == 2
+    assert "did not start" in entry["summary"]
+
+    (data / "upkeep.lock").unlink()
+    assert invoke(config_path).returncode == 0
     assert marker_of(data) is None
 
 
@@ -248,3 +254,63 @@ def test_crash_is_reported_with_the_error_tail(setup):
     entry = marker_of(data)["entries"][0]
     assert entry["kind"] == "failed"
     assert "crashed" in entry["summary"] and "FileNotFoundError" in entry["summary"]
+
+
+def research_stream(search_error=False, fetch=True):
+    """What a research call prints, as the fake claude's output."""
+    url = "https://example.invalid/docs"
+    reply = {
+        "search_worked": True, "official_features": "none", "existing_tools": [], "conventions": "formatters",
+        "sources": [{"url": url, "title": "docs", "used_for": "features"}],
+        "recommendation": "build", "recommendation_reason": "nothing fits",
+    }
+    calls = [("s1", "WebSearch", {"query": "markdown table formatter"}, url, search_error)]
+    if fetch:
+        calls.append(("f1", "WebFetch", {"url": url}, "page text", False))
+    events = []
+    for call_id, name, tool_input, text, is_error in calls:
+        events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": call_id, "name": name, "input": tool_input}]}})
+        events.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": call_id, "content": text, "is_error": is_error}]}})
+    events.append({**FAKE_RESULT, "result": json.dumps(reply)})
+    return "\n".join(json.dumps(event) for event in events)
+
+
+def set_fake_reply(tmp_path, text):
+    (tmp_path / "fake_claude.py").write_text(f"print({json.dumps(text)})\n", encoding="utf-8")
+
+
+def set_local_settings(data):
+    (data / "local.json").write_text(json.dumps({"python_exe": sys.executable, "apply_memory_changes": False, "private_terms": []}), encoding="utf-8")
+
+
+def test_research_check_passes_writes_counts_and_clears_its_own_failure(setup, tmp_path):
+    config_path, data, _ = setup
+    set_local_settings(data)
+    set_fake_reply(tmp_path, research_stream(search_error=True))
+    assert invoke(config_path, "research_check").returncode == 1
+    assert "SearchUnavailableError" in marker_of(data)["entries"][0]["summary"]
+
+    set_fake_reply(tmp_path, research_stream())
+    completed = invoke(config_path, "research_check")
+    assert completed.returncode == 0, completed.stderr
+    assert marker_of(data) is None
+    result = json.loads(sorted((data / "logs").glob("research_check-*.result.json"))[-1].read_text(encoding="utf-8"))
+    assert result["searches"] == 1 and result["fetches"] == 1
+
+
+def test_research_check_without_a_fetched_page_fails_loudly(setup, tmp_path):
+    config_path, data, _ = setup
+    set_local_settings(data)
+    set_fake_reply(tmp_path, research_stream(fetch=False))
+    assert invoke(config_path, "research_check").returncode == 1
+    entry = marker_of(data)["entries"][0]
+    assert entry["kind"] == "failed" and entry["pass"] == "research_check"
+    assert "no page was fetched" in entry["summary"]
+
+
+def test_research_check_with_a_failing_call_fails_loudly(setup, tmp_path):
+    config_path, data, _ = setup
+    set_local_settings(data)
+    set_fake_reply(tmp_path, "not a result")
+    assert invoke(config_path, "research_check").returncode == 1
+    assert marker_of(data)["entries"][0]["kind"] == "failed"

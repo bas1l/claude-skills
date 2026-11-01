@@ -60,6 +60,8 @@ review the diff and commit it. Capture stops if an MCP server's URL or arguments
 | `<skill>/SKILL.md` | Global skills | Directly: this repo *is* `~/.claude/skills` |
 | `hooks/tldr-gate/` | TL;NR summary gate (UserPromptSubmit + Stop hooks) | Referenced in place by `settings.json` |
 | `hooks/session-colocate/` | SessionStart hook: moves the session's `%TEMP%` dir (scratchpad, tasks) next to its transcript and leaves a junction ([README](hooks/session-colocate/README.md)) | Referenced in place by `settings.json` |
+| `hooks/upkeep_status/` | SessionStart hook: one warning line when an upkeep run failed | Referenced in place by `settings.json` |
+| `upkeep/`, `upkeep-review/` | Scheduled upkeep of this setup ([README](upkeep/README.md)) | Tasks registered only with `install.ps1 -RegisterUpkeep` |
 | `setup/claude/CLAUDE.md` | Global instructions | `~/.claude/CLAUDE.md` is a one-line `@import` of it |
 | `setup/claude/commands/` | Slash commands (`/polish`) | Copied to `~/.claude/commands/` |
 | `setup/claude/hooks/` | Brainstorm SessionStart nudge, speak / on-stop scripts | Copied to `~/.claude/hooks/` (their state flags live there) |

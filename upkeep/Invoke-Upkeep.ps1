@@ -29,10 +29,14 @@
   A clean run of a pass clears that pass's "failed" and "budget_stopped" entries, since it
   has caught up. "stale_lock", "secrets_matched" and "window_reset" stay until someone reads them and
   deletes the entry or the file.
+
+  A run that finds the lock held adds a "failed" entry and exits 2, because it will not run until
+  its next trigger: a monthly pass refused at 03:00 would otherwise be lost silently for a month.
+  The entry is written without the lock, so a pass ending at that same instant could overwrite it.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [ValidateSet('daily', 'weekly', 'monthly')] [string] $Pass,
+    [Parameter(Mandatory)] [ValidateSet('daily', 'weekly', 'monthly', 'research_check')] [string] $Pass,
     [string] $ConfigPath = (Join-Path $PSScriptRoot 'config.json')
 )
 
@@ -147,7 +151,9 @@ $script:staleLock = $null
 $script:lockHolder = $null
 
 if (-not (Enter-RunLock $lockPath)) {
-    [Console]::Error.WriteLine("Another upkeep run is live: pass $($script:lockHolder.pass), run $($script:lockHolder.run_id), process $($script:lockHolder.pid). Lock: $lockPath")
+    $text = "Another upkeep run is live: pass $($script:lockHolder.pass), run $($script:lockHolder.run_id), process $($script:lockHolder.pid). Lock: $lockPath"
+    Add-MarkerEntry $markerPath 'failed' "$Pass pass did not start. $text" $EXIT_LOCKED $lockPath $null
+    [Console]::Error.WriteLine($text)
     exit $EXIT_LOCKED
 }
 

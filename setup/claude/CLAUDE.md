@@ -41,6 +41,10 @@ Operate as a manager and orchestrator, not a hands-on worker. Your primary job i
 - Distinguish what is proven from what is plausible. State certainty level
   explicitly and do not present a conjecture as a conclusion.
 
+## Setup upkeep
+
+Scheduled passes read past conversations and keep memories, skills and hooks under review. What runs, where data lives and how to pause or undo: `~/.claude/skills/upkeep/README.md`. If a session starts with an `Upkeep warning:` line, a run failed; that README says what to do.
+
 ## Skills repo updates
 
 When the user asks to fetch, pull or update the skills repo (`~/.claude/skills`, `bas1l/claude-skills`):

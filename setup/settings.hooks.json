@@ -37,6 +37,18 @@
             "statusMessage": "Offering to brainstorm"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": ["{{CLAUDE_DIR}}/skills/hooks/upkeep_status/upkeep_status.py"],
+            "timeout": 5,
+            "statusMessage": "Checking upkeep runs"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

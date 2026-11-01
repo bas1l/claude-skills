@@ -24,18 +24,27 @@
          user-scope MCP servers        setup/plugins-mcp.ps1: missing ones are
                                        installed, ones absent from the manifest
                                        are uninstalled (this step does remove)
+      7. scheduled upkeep tasks     <- only with -RegisterUpkeep, which needs an
+                                       elevated window: runs
+                                       upkeep/Register-UpkeepTasks.ps1. Without the
+                                       flag no task is created or changed
 
 .PARAMETER Python
     python.exe used by the TL;NR and session-colocate hooks (stdlib only;
     Python >= 3.12, required by session-colocate's os.path.isjunction).
     Default: first non-Store `python` on PATH, then D:\Programming\anaconda3\python.exe.
 
+.PARAMETER RegisterUpkeep
+    Registers this machine's upkeep tasks in step 7. Off by default, so other
+    machines are unaffected. See upkeep/README.md.
+
 .EXAMPLE
     git clone git@github.com:bas1l/claude-skills.git $HOME\.claude\skills
     pwsh -File $HOME\.claude\skills\setup\install.ps1
 #>
 param(
-    [string]$Python
+    [string]$Python,
+    [switch]$RegisterUpkeep
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,7 +95,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Python for hooks: $Python"
 
 # ── 1. CLAUDE.md -> @import ──────────────────────────────────────────────────
-Write-Host "`n[1/6] Global CLAUDE.md"
+Write-Host "`n[1/7] Global CLAUDE.md"
 $claudeMd = Join-Path $claudeDir 'CLAUDE.md'
 $stub = "@~/.claude/skills/setup/claude/CLAUDE.md"
 $current = if (Test-Path $claudeMd) { (Get-Content $claudeMd -Raw).Trim() } else { '' }
@@ -100,7 +109,7 @@ if ($current -eq $stub) {
 
 # ── 2–3. Commands and hook scripts ───────────────────────────────────────────
 foreach ($sub in 'commands', 'hooks') {
-    Write-Host "`n[$(if ($sub -eq 'commands') {2} else {3})/6] ~/.claude/$sub"
+    Write-Host "`n[$(if ($sub -eq 'commands') {2} else {3})/7] ~/.claude/$sub"
     $dstDir = Join-Path $claudeDir $sub
     New-Item -ItemType Directory -Force $dstDir | Out-Null
     Get-ChildItem (Join-Path $setupDir "claude\$sub") -File | ForEach-Object {
@@ -109,7 +118,7 @@ foreach ($sub in 'commands', 'hooks') {
 }
 
 # ── 4. settings.json hooks ───────────────────────────────────────────────────
-Write-Host "`n[4/6] settings.json hooks and settings"
+Write-Host "`n[4/7] settings.json hooks and settings"
 $settingsPath = Join-Path $claudeDir 'settings.json'
 $template = (Get-Content (Join-Path $setupDir 'settings.hooks.json') -Raw).
     Replace('{{PYTHON}}', ($Python -replace '\\', '/')).
@@ -138,7 +147,7 @@ if ($before -eq $after) {
 }
 
 # ── 5. PowerShell profile -> cc launcher ─────────────────────────────────────
-Write-Host "`n[5/6] PowerShell profile (cc launcher)"
+Write-Host "`n[5/7] PowerShell profile (cc launcher)"
 $profilePath = $PROFILE.CurrentUserCurrentHost
 $line = '. "$HOME\.claude\skills\setup\pwsh\cc.ps1"   # Claude Code `cc` launcher (claude-skills repo)'
 $profileText = if (Test-Path $profilePath) { Get-Content $profilePath -Raw } else { '' }
@@ -155,8 +164,17 @@ if ($profileText -match [regex]::Escape('.claude\skills\setup\pwsh\cc.ps1')) {
 }
 
 # ── 6. Plugins, marketplaces, MCP servers ────────────────────────────────────
-Write-Host "`n[6/6] Plugins, marketplaces and MCP servers (setup/plugins-mcp.json)"
+Write-Host "`n[6/7] Plugins, marketplaces and MCP servers (setup/plugins-mcp.json)"
 & (Join-Path $setupDir 'plugins-mcp.ps1')
 if ($LASTEXITCODE) { throw "plugins-mcp.ps1 failed (exit $LASTEXITCODE)." }
+
+# ── 7. Scheduled upkeep tasks (opt-in) ───────────────────────────────────────
+Write-Host "`n[7/7] Scheduled upkeep tasks"
+if ($RegisterUpkeep) {
+    & (Join-Path $setupDir '..\upkeep\Register-UpkeepTasks.ps1')
+    if ($LASTEXITCODE) { throw "Register-UpkeepTasks.ps1 failed (exit $LASTEXITCODE)." }
+} else {
+    Write-Host "    skipped: not requested (-RegisterUpkeep)"
+}
 
 Write-Host "`nDone. Open a new terminal (for cc) and restart Claude Code (for hooks, CLAUDE.md, plugins and MCP servers)."
