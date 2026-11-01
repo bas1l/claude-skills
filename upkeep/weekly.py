@@ -11,7 +11,7 @@ Order of a run:
        fails here, before any proposal or memory is written.
     6. Write proposals. Apply memory changes as one commit per folder, or mark them
        ``would_apply`` if ``apply_memory_changes`` is false in the local settings.
-    7. Write the report, and commit the data folder.
+    7. Write the report and the review, and commit the data folder.
 
 Idempotent per ISO week. A run reuses model replies whose input is unchanged. A folder holding
 this week's commit is never written again, and a run that succeeded does nothing the next time.
@@ -21,6 +21,8 @@ It also researches held items, which stay held, so that it proves the research p
 Written under the data folder:
 
     reports/YYYY-Www/report.json     the format below, which the review step reads
+    reports/YYYY-Www/review.json     the review built from it; see review_data.py
+    reports/YYYY-Www/review.html     the page rendered from that, by review_page.py
     reports/YYYY-Www/groups/         model replies by group, with a hash of their input
     reports/YYYY-Www/research/       research records
     reports/YYYY-Www/usage.jsonl     one line per model call
@@ -67,6 +69,7 @@ import ledger
 import memory_store
 import model_call
 import research
+import review_data
 import schemas
 import sessions
 import transcripts
@@ -344,7 +347,7 @@ def _proposal_record(
     failure = failures.get(proposal.failure)
     procedure = procedures.get(proposal.procedure)
     return {
-        "id": proposal_id(proposal.kind, proposal.target or proposal.title),
+        "id": proposal_id(proposal.kind, f"{proposal.target} {proposal.title}"),
         "kind": proposal.kind,
         "change_type": proposal.change_type,
         "title": proposal.title,
@@ -367,9 +370,11 @@ def _proposal_record(
     }
 
 
-def _memory_proposal(kind: str, name: str, folder: str, title: str, what: str, why: str, exact: str, evidence: dict[str, Any]) -> dict[str, Any]:
+def _memory_proposal(kind: str, name: str, folder: str, title: str, what: str, why: str, exact: str, evidence: dict[str, Any], distinct: str = "") -> dict[str, Any]:
+    """``distinct`` keeps two proposals on one memory apart, which would otherwise overwrite
+    each other's folder and be taken for each other in later weeks."""
     return {
-        "id": proposal_id(kind, f"{folder} {name}"),
+        "id": proposal_id(kind, f"{folder} {name} {distinct}"),
         "kind": kind,
         "change_type": schemas.CHANGE_EXISTING if kind != KIND_MEMORY_FACT else schemas.CHANGE_NEW,
         "title": title,
@@ -481,17 +486,31 @@ def _store_proposals(proposals: list[dict[str, Any]], config: Config, week: str)
     return stored, redacted_total
 
 
+def _revision_declined(decisions: Sequence[Mapping[str, Any]], identity: Mapping[str, str], cited: Sequence[Mapping[str, Any]]) -> bool:
+    """A flag stays up for as long as its entries stand, so a rejection has to be read here: this
+    revision stays out until an entry behind the flag is newer than the rejection."""
+    latest = max(datetime.fromisoformat(entry["date"]) for entry in cited)
+    return any(
+        decision["scope"] == identity["scope"] and decision["kind"] == identity["kind"] and decision["name"] == identity["name"]
+        and decision["action"] == schemas.ACTION_REVISION and datetime.fromisoformat(decision["decided_at"]) >= latest
+        for decision in decisions
+    )
+
+
 def _revision_proposals(
-    flags: Sequence[Mapping[str, Any]], config: Config, ledgers_dir: str, changed: set[tuple[str, str]]
+    flags: Sequence[Mapping[str, Any]], config: Config, ledgers_dir: str, changed: set[tuple[str, str]], decisions: Sequence[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
     """A flag raises a proposal to revise, and never edits or deletes. A memory gone, changed in
-    this pass, or changed by the weekly pass since the entries behind the flag is passed over."""
+    this pass, changed by the weekly pass since the entries behind the flag, or a revision rejected
+    since them is passed over."""
     proposals = []
     for flag in flags:
         identity = flag["identity"]
         item = ledger.ItemId(**identity)
         document = ledger.load_ledger(ledgers_dir, item)
         cited = [entry for entry in document["entries"] if entry["id"] in flag["entries"]]
+        if _revision_declined(decisions, identity, cited):
+            continue
         if identity["kind"] == ledger.KIND_MEMORY:
             folder = identity["scope"][len(ledger.SCOPE_PROJECT_PREFIX):]
             if (folder, identity["name"]) in changed:
@@ -505,7 +524,7 @@ def _revision_proposals(
         else:
             folder = ""
             kind = KIND_ITEM_REVISION
-        evidence = {"flag_reason": flag["reason"], "entries": [{k: entry[k] for k in ("date", "session", "who", "basis", "what", "quote")} for entry in cited]}
+        evidence = {"identity": identity, "flag_reason": flag["reason"], "entries": [{k: entry[k] for k in ("date", "session", "who", "basis", "what", "quote")} for entry in cited]}
         proposals.append(_memory_proposal(
             kind, identity["name"], folder, f"Review {identity['kind']} {identity['name']}",
             "Read this item against what was said about it, and revise it if it no longer holds.",
@@ -520,7 +539,7 @@ def _fact_and_deletion_proposals(state: weekly_gate.MemoryGateState) -> list[dic
         proposals.append(_memory_proposal(
             KIND_MEMORY_FACT, fact.memory, folder, f"Save a fact in memory {fact.memory}", fact.claim,
             "A lasting fact the user never reacted to, so someone reads it before it is saved.",
-            fact.claim, _evidence_of([record]),
+            fact.claim, _evidence_of([record]), distinct=fact.claim,
         ))
     for gated in state.deletion_proposals:
         change = gated.change
@@ -780,7 +799,7 @@ def _run_stages(
     held.extend(over_limit)
 
     changed = {(gated.project_folder, gated.change.memory) for gated in gate_state.accepted}
-    all_proposals = [*kept, *_fact_and_deletion_proposals(gate_state), *_revision_proposals(flags, config, ledgers_dir, changed)]
+    all_proposals = [*kept, *_fact_and_deletion_proposals(gate_state), *_revision_proposals(flags, config, ledgers_dir, changed, decisions)]
     stored, _ = _store_proposals(all_proposals, config, week)
     report["proposals"] = stored
     report["held"] = [{key: value for key, value in item.items() if not key.startswith("_")} for item in held]
@@ -913,6 +932,7 @@ def run_weekly(
     report, redacted = extract.redact_value(report, config)
     schemas.validate_weekly_report(report, "weekly report")
     _write_json(os.path.join(report_dir_of(config, week), "report.json"), report)
+    result["review_page"] = review_data.write_review(config, report, now)
 
     result["secrets_redacted"] += redacted
     result["model_calls"] = caller.totals.calls

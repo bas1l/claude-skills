@@ -126,6 +126,13 @@ class ResearchConfig:
 
 
 @dataclass(frozen=True)
+class ReviewConfig:
+    skills_base_branch: str
+    skills_branch_prefix: str
+    failures_shown: int
+
+
+@dataclass(frozen=True)
 class LocalSettings:
     """What differs per machine and stays out of this public repository."""
 
@@ -148,6 +155,7 @@ class Config:
     ledger: LedgerConfig
     weekly: WeeklyConfig
     research: ResearchConfig
+    review: ReviewConfig
 
 
 def _expand_path(value: str) -> str:
@@ -186,6 +194,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("ledger", LedgerConfig),
         ("weekly", WeeklyConfig),
         ("research", ResearchConfig),
+        ("review", ReviewConfig),
     ):
         _check_keys(section, raw[section], section_type)
 
@@ -230,6 +239,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ),
         weekly=WeeklyConfig(**{**raw["weekly"], "memory_excluded_origins": tuple(raw["weekly"]["memory_excluded_origins"])}),
         research=ResearchConfig(**{**raw["research"], "public_path_fragments": tuple(raw["research"]["public_path_fragments"])}),
+        review=ReviewConfig(**raw["review"]),
     )
 
 

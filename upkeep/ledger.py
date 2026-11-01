@@ -55,6 +55,7 @@ DECISIONS_FILE = "review-decisions.json"
 DECISIONS_SCHEMA_VERSION = 1
 DECISION_UNDONE = "undone"
 DECISION_REJECTED = "rejected"
+REVIEW_SOURCE_PREFIX = "review/"
 DECISION_FIELDS = frozenset({"id", "decided_at", "decision", "scope", "kind", "name", "action", "claim", "week"})
 REPORTS_SCHEMA_VERSION = 1
 
@@ -204,7 +205,9 @@ def lost_balance(document: Mapping[str, Any], as_of: datetime, rule: LedgerConfi
       - at least ``inferred_against_entries`` inferred entries against fall inside the last
         ``inferred_window_days``, and no entry for does.
 
-    Age alone never flags an item, since only entries are read.
+    Age alone never flags an item, since only entries are read. An undo or rejection in a review
+    is held as an entry against but counts for neither: undoing one change says nothing about the
+    rest of the item, and ``review-decisions.json`` is what stops the change coming back.
     """
     if as_of.tzinfo is None:
         raise LedgerError("as_of must carry a UTC offset")
@@ -230,7 +233,7 @@ def lost_balance(document: Mapping[str, Any], as_of: datetime, rule: LedgerConfi
         return None
     inferred_against = [
         entry for entry in recent
-        if entry["basis"] != schemas.BASIS_DIRECT
+        if entry["basis"] not in (schemas.BASIS_DIRECT, schemas.BASIS_REVIEW_DECISION)
         and entry["direction"] == schemas.STANCE_AGAINST
         and (cleared_through is None or _entry_date(entry) > cleared_through)
     ]
@@ -387,6 +390,26 @@ def discard_entries_from_notes(ledgers_dir: str, notes_prefix: str) -> int:
                     document["entries"] = kept
                     _write_json_atomic(path, document)
     return removed
+
+
+def review_entry(
+    entry_id: str, decided_at: str, session: str, project_folder: str, what: str, week: str, item_key: str
+) -> dict[str, Any]:
+    """An entry against, for something the user undid or rejected in a review."""
+    return {
+        "id": entry_id,
+        "date": decided_at,
+        "session": session,
+        "project_folder": project_folder,
+        "direction": schemas.STANCE_AGAINST,
+        "who": schemas.WHO_USER,
+        "basis": schemas.BASIS_REVIEW_DECISION,
+        "what": what,
+        "quote": "",
+        "quote_check": schemas.QUOTE_NONE,
+        "origin_of_point": "user",
+        "source": {"notes": f"{REVIEW_SOURCE_PREFIX}{week}/{item_key}", "note_index": 0},
+    }
 
 
 def _check_decision(decision: Mapping[str, Any], where: str) -> None:

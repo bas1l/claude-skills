@@ -44,6 +44,9 @@ WHO_AGENT = "agent"
 BASIS_DIRECT = "direct_statement"
 BASIS_INFERRED = "inferred"
 ENTRY_BASES_OF_USER = frozenset({BASIS_DIRECT, "accepted", "relied_on"})
+# The user undid or rejected something in a review. It is their act, but not a statement about
+# the item, so it holds no quote and does not count towards lost balance.
+BASIS_REVIEW_DECISION = "review_decision"
 ENTRY_FIELDS = frozenset({
     "id", "date", "session", "project_folder", "direction", "who", "basis", "what", "quote", "quote_check",
     "origin_of_point", "source",
@@ -199,14 +202,20 @@ def validate_ledger_entry(values: Any, where: str) -> None:
     _aware_timestamp(values["date"], f"{where}: date")
     _enum(values, "direction", ENTRY_DIRECTIONS, where)
     who = _enum(values, "who", frozenset({WHO_USER, WHO_AGENT}), where)
-    basis = _enum(values, "basis", ENTRY_BASES_OF_USER | {BASIS_INFERRED}, where)
-    if (who == WHO_USER) != (basis in ENTRY_BASES_OF_USER):
+    basis = _enum(values, "basis", ENTRY_BASES_OF_USER | {BASIS_INFERRED, BASIS_REVIEW_DECISION}, where)
+    if (who == WHO_USER) != (basis in ENTRY_BASES_OF_USER or basis == BASIS_REVIEW_DECISION):
         raise SchemaError(f"{where}: who {who!r} does not fit basis {basis!r}")
     quote_check = _enum(values, "quote_check", frozenset({QUOTE_VERIFIED, QUOTE_NOT_FOUND, QUOTE_NONE}), where)
-    if who == WHO_USER and quote_check != QUOTE_VERIFIED:
-        raise SchemaError(f"{where}: an entry attributed to the user needs a verified quote")
-    if not isinstance(values["quote"], str) or bool(values["quote"]) != (who == WHO_USER):
-        raise SchemaError(f"{where}: quote must be set exactly when the entry is attributed to the user")
+    if not isinstance(values["quote"], str):
+        raise SchemaError(f"{where}: quote must be text")
+    if basis == BASIS_REVIEW_DECISION:
+        if values["quote"] or quote_check != QUOTE_NONE:
+            raise SchemaError(f"{where}: a review decision holds no quote")
+    else:
+        if who == WHO_USER and quote_check != QUOTE_VERIFIED:
+            raise SchemaError(f"{where}: an entry attributed to the user needs a verified quote")
+        if bool(values["quote"]) != (who == WHO_USER):
+            raise SchemaError(f"{where}: quote must be set exactly when the entry is attributed to the user")
     _enum(values, "origin_of_point", ORIGINS, where)
     source = values["source"]
     if not isinstance(source, dict) or set(source) != {"notes", "note_index"}:
@@ -283,6 +292,7 @@ ACTION_REMOVE = "remove"
 ACTION_DELETE = "delete"
 MEMORY_ACTIONS = frozenset({ACTION_CREATE, ACTION_ADD, ACTION_REPLACE, ACTION_REMOVE, ACTION_DELETE})
 DELETING_ACTIONS = frozenset({ACTION_REMOVE, ACTION_DELETE})
+ACTION_REVISION = "revision"
 ENDORSED_SAID = "said"
 ENDORSED_RELIED_ON = "relied_on"
 MEMORY_CHANGE_FIELDS = frozenset({
@@ -529,3 +539,65 @@ def validate_weekly_report(document: Any, where: str) -> None:
     for key in ("proposals", "held"):
         for index, proposal in enumerate(document[key]):
             _exact_fields(proposal, WEEKLY_PROPOSAL_FIELDS, f"{where} {key} {index}")
+
+
+# ---------------------------------------------------------------------------
+# The review: review.json, the source of truth of a review session.
+# ---------------------------------------------------------------------------
+
+REVIEW_SCHEMA_VERSION = 1
+REVIEW_FIELDS = frozenset({
+    "schema_version", "review_id", "week", "run_id", "built_at", "report_status", "stop_reason", "apply_enabled",
+    "weeks_overdue", "last_action_at", "failures", "coverage", "usage", "items", "held", "rejected",
+    "failures_ranked", "before_after",
+})
+REVIEW_ITEM_FIELDS = frozenset({
+    "number", "key", "section", "origin", "week", "carried", "title", "allowed", "decision", "skipped_at", "ledger", "record",
+})
+SECTION_MEMORY = "memory"
+SECTION_PROPOSAL = "proposal"
+REVIEW_SECTIONS = frozenset({SECTION_MEMORY, SECTION_PROPOSAL})
+ORIGIN_WEEKLY = "weekly"
+ORIGIN_MONTHLY = "monthly"
+REVIEW_ORIGINS = frozenset({ORIGIN_WEEKLY, ORIGIN_MONTHLY})
+ACTION_UNDO = "undo"
+ACTION_KEEP = "keep"
+ACTION_SKIP = "skip"
+ACTION_WHY = "why"
+ACTION_REJECT = "reject"
+ACTION_APPROVE = "approve"
+REVIEW_ACTIONS = frozenset({ACTION_UNDO, ACTION_KEEP, ACTION_SKIP, ACTION_WHY, ACTION_REJECT, ACTION_APPROVE})
+OUTCOME_UNDONE = "undone"
+OUTCOME_KEPT = "kept"
+OUTCOME_REJECTED = "rejected"
+OUTCOME_APPROVED = "approved"
+REVIEW_OUTCOMES = frozenset({OUTCOME_UNDONE, OUTCOME_KEPT, OUTCOME_REJECTED, OUTCOME_APPROVED})
+
+
+def validate_review(document: Any, where: str) -> None:
+    """Raise unless this is a well-formed review. Numbers must run 1 to n, so that a number
+    Basil types can only mean one item."""
+    _exact_fields(document, REVIEW_FIELDS, where)
+    if document["schema_version"] != REVIEW_SCHEMA_VERSION:
+        raise SchemaError(f"{where}: schema_version {document['schema_version']!r}")
+    if not isinstance(document["apply_enabled"], bool):
+        raise SchemaError(f"{where}: apply_enabled must be true or false")
+    if not isinstance(document["weeks_overdue"], int) or document["weeks_overdue"] < 0:
+        raise SchemaError(f"{where}: weeks_overdue must be a whole number, 0 or more")
+    items = document["items"]
+    if [item.get("number") for item in items] != list(range(1, len(items) + 1)):
+        raise SchemaError(f"{where}: item numbers must run from 1 without a gap")
+    keys = [item.get("key") for item in items]
+    if len(set(keys)) != len(keys):
+        raise SchemaError(f"{where}: two items hold the same key")
+    for item in items:
+        place = f"{where} item {item.get('number')}"
+        _exact_fields(item, REVIEW_ITEM_FIELDS, place)
+        _enum(item, "section", REVIEW_SECTIONS, place)
+        _enum(item, "origin", REVIEW_ORIGINS, place)
+        if not set(item["allowed"]) <= REVIEW_ACTIONS:
+            raise SchemaError(f"{place}: unknown action in {item['allowed']}")
+        decision = item["decision"]
+        if decision is not None:
+            _exact_fields(decision, frozenset({"outcome", "at", "detail"}), f"{place} decision")
+            _enum(decision, "outcome", REVIEW_OUTCOMES, f"{place} decision")

@@ -107,5 +107,10 @@
     "description_max_chars": 600,
     "memory_shingle_words": 6,
     "public_path_fragments": ["~/.claude/", ".claude/"]
+  },
+  "review": {
+    "skills_base_branch": "master",
+    "skills_branch_prefix": "upkeep/",
+    "failures_shown": 10
   }
 }

@@ -16,6 +16,8 @@ import ledger
 import memory_store
 import model_call
 import research
+import review_data
+import review_session
 import schemas
 import sessions
 import weekly
@@ -622,6 +624,94 @@ def test_lost_balance_flag_becomes_a_revision_proposal_and_never_edits(tree):
     run(tree, LIVE, FakeCall())
     assert path.read_text(encoding="utf-8") == before
     assert [item["kind"] for item in report_of(tree)["proposals"]] == [weekly.KIND_MEMORY_REVISION]
+
+
+def test_a_pass_writes_the_review_and_its_page(tree):
+    read_notes(tree, note())
+    result = run(tree, DRY, FakeCall(memory=memory_reply(change())))
+    page = Path(result["review_page"])
+    assert page.name == "review.html" and "Would apply." in page.read_text(encoding="utf-8")
+    review = review_data.latest_review(tree.paths.data_dir)
+    assert [(item["number"], item["title"]) for item in review["items"]] == [(1, "New memory: short-reports")]
+    tracked = subprocess.run(["git", "-C", tree.paths.data_dir, "ls-files", "reports"], capture_output=True, encoding="utf-8", check=True).stdout
+    assert "review.json" in tracked and "review.html" in tracked
+
+
+def test_a_failed_pass_still_writes_a_page_that_says_so(tree):
+    read_notes(tree, note())
+    result = run(tree, LIVE, FakeCall(memory="not json"))
+    assert result["status"] == "failed"
+    text = Path(result["review_page"]).read_text(encoding="utf-8")
+    assert "Something failed" in text
+
+
+def test_an_undone_change_is_not_proposed_again_the_following_week(tree):
+    read_notes(tree, note())
+    assert run(tree, LIVE, FakeCall(memory=memory_reply(change())))["status"] == "ok"
+    path = memory_path(tree, "short-reports")
+    assert path.exists()
+    review = review_data.latest_review(tree.paths.data_dir)
+    undone_at = NOW + timedelta(hours=1)
+    review_session.undo(tree, review["review_id"], 1, SESSION_ID, undone_at)
+    assert not path.exists()
+    assert commits_in(tree)[0].startswith("Undo upkeep change")
+
+    later = NOW + timedelta(days=7)
+    other_session = "00000000-0000-4000-8000-000000000002"
+    read_notes(tree, note(), session_id=other_session)
+    assert run(tree, LIVE, FakeCall(memory=memory_reply(change())), now=later)["status"] == "ok"
+    assert not path.exists()
+    report = report_of(tree, later)
+    assert [item["reason"] for item in report["rejected"]] == [weekly_gate.REJECT_DECLINED]
+    assert review_data.latest_review(tree.paths.data_dir)["items"] == []
+
+
+def test_two_proposals_on_one_target_get_their_own_ids_and_folders(tree):
+    read_notes(tree, note(route="hook"), note(route="hook", what="Another."), note(route="hook", what="A third."))
+    first = proposal(title="First idea", what="One thing.", target="some_hook", change_type="change", basis="stated_rule", kind="global_rule", notes=["n1"])
+    second = {**first, "title": "Second idea", "what": "Another thing."}
+    fake = FakeCall(proposals=json.dumps({"proposals": [first, second]}))
+    run(tree, DRY, fake)
+    ids = [item["id"] for item in report_of(tree)["proposals"] + report_of(tree)["held"]]
+    assert len(ids) == 2 and len(set(ids)) == 2
+
+
+def test_two_facts_on_one_memory_get_their_own_ids(tree):
+    read_notes(tree, note(endorsement="none", endorsement_quote=""))
+    facts = [{"memory": "a-memory", "note": "n1", "claim": "The first fact."}, {"memory": "a-memory", "note": "n1", "claim": "The second fact."}]
+    run(tree, DRY, FakeCall(memory=memory_reply(facts=facts)))
+    ids = [item["id"] for item in report_of(tree)["proposals"]]
+    assert len(ids) == 2 and len(set(ids)) == 2
+
+
+def _doubted_memory(tree):
+    read_notes(tree, note())
+    add_memory(tree, "doubted", "A doubted statement.")
+    daily.run_daily(tree, "sync", call=FakeCall())
+    ledger.append_entry(ledger.ledgers_dir_of(tree.paths.data_dir), ledger.ItemId(ledger.project_scope(PROJECT), "memory", "doubted"), {
+        "id": "e1", "date": "2031-01-01T00:00:00+00:00", "session": SESSION_ID, "project_folder": PROJECT,
+        "direction": "against", "who": "user", "basis": "direct_statement", "what": "The user said it is wrong.",
+        "quote": "that is wrong", "quote_check": "verified", "origin_of_point": "user", "source": {"notes": "n", "note_index": 0},
+    })
+
+
+def test_a_rejected_revision_stays_out_until_a_newer_entry(tree):
+    _doubted_memory(tree)
+    run(tree, LIVE, FakeCall())
+    review = review_data.latest_review(tree.paths.data_dir)
+    assert review["items"][0]["record"]["kind"] == weekly.KIND_MEMORY_REVISION
+    review_session.reject(tree, review["review_id"], 1, SESSION_ID, NOW + timedelta(hours=1))
+    later = NOW + timedelta(days=7)
+    run(tree, LIVE, FakeCall(), now=later)
+    assert report_of(tree, later)["proposals"] == []
+    ledger.append_entry(ledger.ledgers_dir_of(tree.paths.data_dir), ledger.ItemId(ledger.project_scope(PROJECT), "memory", "doubted"), {
+        "id": "e2", "date": (later + timedelta(days=1)).isoformat(), "session": SESSION_ID, "project_folder": PROJECT,
+        "direction": "against", "who": "user", "basis": "direct_statement", "what": "The user said so again.",
+        "quote": "still wrong", "quote_check": "verified", "origin_of_point": "user", "source": {"notes": "n", "note_index": 1},
+    })
+    latest = NOW + timedelta(days=14)
+    run(tree, LIVE, FakeCall(), now=latest)
+    assert [item["kind"] for item in report_of(tree, latest)["proposals"]] == [weekly.KIND_MEMORY_REVISION]
 
 
 def test_before_and_after_reports_each_earlier_change(tree):

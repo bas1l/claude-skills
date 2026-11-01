@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
@@ -383,6 +384,162 @@ def apply_memory_writes(
         "commit", "--quiet", "--message", f"{message}\n\n{WEEK_TRAILER}: {week}", "--", *paths,
     )
     return {"commit": _run_git(folder, "rev-parse", "HEAD").stdout.strip(), "conflicts": conflicts}
+
+
+class UndoConflictError(MemoryStoreError):
+    """The file has moved on in the same lines, so one change cannot be taken out by itself."""
+
+
+UNDO_RESTORED = "restored"
+UNDO_ALREADY = "already_restored"
+
+
+def _three_way(current: str, base: str, target: str) -> Optional[str]:
+    """``current`` with the step from ``base`` to ``target`` applied, or None if they clash.
+    Works on bytes, so that line endings stay as they are."""
+    with tempfile.TemporaryDirectory(prefix="upkeep-undo-") as directory:
+        paths = []
+        for name, text in (("current", current), ("base", base), ("target", target)):
+            path = os.path.join(directory, name)
+            with open(path, "wb") as handle:
+                handle.write(text.encode("utf-8"))
+            paths.append(path)
+        completed = subprocess.run(
+            ["git", "merge-file", "-p", "-q", *paths],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            check=False,
+        )
+    if completed.returncode == 0:
+        return completed.stdout.decode("utf-8")
+    if 0 < completed.returncode < 128:
+        return None
+    raise MemoryStoreError(f"git merge-file: exit {completed.returncode}: {completed.stderr.decode('utf-8', 'replace').strip()}")
+
+
+def _text_after_undo(current: Optional[str], before: Optional[str], after: Optional[str], file_name: str) -> Optional[str]:
+    """What the file should hold once this one change is taken out. Raises if that cannot be told."""
+    clash = (
+        f"{file_name} has changed since, in the same lines, so this change cannot be taken out by itself. "
+        "Undo the newer change on this memory first, or edit the file by hand."
+    )
+    if before is None:
+        if current is None or current == after:
+            return None
+        merged = _three_way(current, after if after is not None else "", "")
+        if merged is None:
+            raise UndoConflictError(clash)
+        return merged if merged.strip() else None
+    if after is None:
+        if current is None or current == before:
+            return before
+        raise UndoConflictError(clash)
+    if current is None:
+        raise UndoConflictError(clash)
+    merged = _three_way(current, after, before)
+    if merged is None:
+        raise UndoConflictError(clash)
+    return merged
+
+
+def _commit_paths(folder: str, paths: Sequence[str], identity: MemoryConfig, message: str) -> str:
+    """Commit these paths alone, so that a live edit arriving meanwhile stays out."""
+    _run_git(folder, "add", "--all", "--", *paths)
+    _run_git(
+        folder,
+        "-c", f"user.name={identity.author_name}",
+        "-c", f"user.email={identity.author_email}",
+        "commit", "--quiet", "--message", message, "--", *paths,
+    )
+    return _run_git(folder, "rev-parse", "HEAD").stdout.strip()
+
+
+def _write_exact(path: str, text: Optional[str]) -> None:
+    if text is None:
+        os.remove(path)
+        return
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def _index_line_at(folder: str, commit: str, file_name: str) -> Optional[str]:
+    """The index line this file had just before a commit, if it had one."""
+    shown = _run_git(folder, "show", f"{commit}^:{INDEX_FILE}", check=False)
+    if shown.returncode != 0:
+        return None
+    lines = [line for line in shown.stdout.splitlines() if f"]({file_name})" in line]
+    return lines[0] if lines else None
+
+
+def undo_change(
+    folder: str,
+    file_name: str,
+    before: Optional[str],
+    after: Optional[str],
+    commit: str,
+    identity: MemoryConfig,
+    message: str,
+) -> dict[str, Any]:
+    """Take one applied change out of a memory by a new commit. History is never rewritten.
+
+    A pass makes one commit per folder, which may hold several changes, so this works from the
+    change's own before and after and not by reverting the commit. Edits made since in other lines
+    stay. Running it again finds the change gone and commits nothing.
+    """
+    state = classify(folder)
+    if state != STATE_ADOPTABLE:
+        raise MemoryStoreError(f"{folder}: state {state!r}; refusing to commit here")
+    if _run_git(folder, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0:
+        raise MemoryStoreError(f"{folder}: holds no commit {commit}")
+    commit_all(folder, identity, f"Snapshot of edits by live sessions, before an undo of {file_name}")
+    path = os.path.join(folder, file_name)
+    current = read_memory_file(path)
+    restored = _text_after_undo(current, before, after, file_name)
+    if restored == current:
+        return {"result": UNDO_ALREADY, "commit": None}
+    _write_exact(path, restored)
+    paths = [file_name]
+    index_path = os.path.join(folder, INDEX_FILE)
+    index_text = read_memory_file(index_path)
+    edited = index_text
+    if restored is None:
+        edited = index_without_file(index_text, file_name)
+    elif current is None:
+        line = _index_line_at(folder, commit, file_name)
+        if line is not None:
+            edited = index_with_line(index_without_file(index_text, file_name), line)
+    if edited != index_text:
+        _write_exact(index_path, edited)
+        paths.append(INDEX_FILE)
+    return {"result": UNDO_RESTORED, "commit": _commit_paths(folder, paths, identity, message)}
+
+
+def write_reviewed_memory(
+    folder: str,
+    file_name: str,
+    expected_before: Optional[str],
+    content: Optional[str],
+    index_edit: Optional[IndexEdit],
+    identity: MemoryConfig,
+    message: str,
+) -> str:
+    """Write a change the user approved in a review, as a commit of its own. Refuses a file that
+    differs from what the change was worked out on. Holds no week trailer, since it is no pass."""
+    _prepare_folder_for_writing(folder, identity, f"Snapshot of edits by live sessions, before a reviewed change of {file_name}")
+    path = os.path.join(folder, file_name)
+    if read_memory_file(path) != expected_before:
+        raise MemoryEditError(f"{file_name} changed while this was being applied")
+    _write_exact(path, content)
+    paths = [file_name]
+    if index_edit is not None:
+        index_path = os.path.join(folder, INDEX_FILE)
+        index_text = index_without_file(read_memory_file(index_path), index_edit.file_name)
+        if index_edit.line is not None:
+            index_text = index_with_line(index_text, index_edit.line)
+        if index_text is not None:
+            _write_exact(index_path, index_text)
+            paths.append(INDEX_FILE)
+    return _commit_paths(folder, paths, identity, message)
 
 
 def plan_memory_repos(projects_dir: str) -> list[dict[str, Any]]:
