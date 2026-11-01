@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from conftest import CWD, SESSION_ID, assistant_text, human, user_with_origin, write_jsonl
+from conftest import CWD, SESSION_ID, assistant_text, human, synthetic_inventory, user_with_origin, write_jsonl
 
 import daily
+import ledger
 import memory_store
 import model_call
 import sessions
-from config import SessionsConfig
+from config import InventoryConfig, SessionsConfig
 
 OTHER_ID = "00000000-0000-4000-8000-000000000002"
 
@@ -24,7 +25,7 @@ def note(**overrides):
     values = {
         "type": "preference", "what": "Prefers short reports.", "evidence": "USER-TYPED",
         "memory_candidate": True, "endorsement": "said", "endorsement_quote": "keep it short",
-        "origin_of_point": "user", "route": "memory", "confidence": "high",
+        "origin_of_point": "user", "route": "memory", "confidence": "high", "items": [],
     }
     values.update(overrides)
     return values
@@ -66,6 +67,7 @@ def tree(config, tmp_path):
     data.mkdir()
     run_dir = data / "run"
     run_dir.mkdir()
+    inventory = synthetic_inventory(tmp_path)
     built = dataclasses.replace(
         config,
         paths=dataclasses.replace(config.paths, projects_dir=str(projects), data_dir=str(data), run_dir=str(run_dir)),
@@ -76,6 +78,7 @@ def tree(config, tmp_path):
             count_only_cwd_prefixes=(str(tmp_path / "brief"),),
         ),
         memory=dataclasses.replace(config.memory, author_name="Test Author", author_email="test@example.invalid"),
+        inventory=InventoryConfig(**{**inventory, "optional_settings_files": ()}),
     )
     memory_store.init_upkeep_repo(str(data), built.memory)
     daily.init_state(built)
@@ -331,3 +334,57 @@ def test_pinned_window_with_a_lost_transcript_is_a_failure(tree):
     result = daily.run_daily(tree, "r1", call=FakeCall(reply_of()))
     assert result["status"] == daily.STATUS_FAILED
     assert result["failed_sessions"][0]["session"] == "gone/abc"
+
+
+def write_memory(config, project, name, text="**Why:** a stated reason\n"):
+    folder = Path(config.paths.projects_dir) / project / "memory"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(text, encoding="utf-8")
+
+
+def test_a_note_naming_an_item_becomes_a_ledger_entry(tree):
+    write_memory(tree, "proj", "known.md")
+    add_session(tree, "proj", SESSION_ID, chat())
+    named = [
+        {"kind": "memory", "name": "known", "stance": "against"},
+        {"kind": "memory", "name": "unknown", "stance": "against"},
+    ]
+    result = daily.run_daily(tree, "r1", call=FakeCall(reply_of(note(items=named))))
+
+    assert result["status"] == daily.STATUS_OK
+    summary = result["ledger"]
+    assert (summary["ledgers_created"], summary["notes"]["entries_added"], summary["notes"]["mentions_unmapped"]) == (1, 1, 1)
+    assert summary["revision_flags"] == 1
+    identity = ledger.ItemId(ledger.project_scope("proj"), "memory", "known")
+    ledgers = ledger.ledgers_dir_of(tree.paths.data_dir)
+    document = ledger.load_ledger(ledgers, identity)
+    assert document["origin"]["status"] == "untraced"
+    entry, = document["entries"]
+    assert (entry["direction"], entry["who"], entry["basis"], entry["quote"]) == ("against", "user", "direct_statement", "keep it short")
+    assert entry["session"] == SESSION_ID
+    assert any(name.startswith("ledgers/") for name in tracked(tree))
+
+    again = daily.run_daily(tree, "r2", call=FakeCall(reply_of()))
+    assert again["ledger"]["notes"]["entries_added"] == 0
+    assert len(ledger.load_ledger(ledgers, identity)["entries"]) == 1
+
+
+def test_a_run_with_no_mention_adds_no_entry(tree):
+    write_memory(tree, "proj", "known.md")
+    add_session(tree, "proj", SESSION_ID, chat())
+    result = daily.run_daily(tree, "r1", call=FakeCall(reply_of(note())))
+    assert result["ledger"]["notes"]["entries_added"] == 0
+    identity = ledger.ItemId(ledger.project_scope("proj"), "memory", "known")
+    assert ledger.load_ledger(ledger.ledgers_dir_of(tree.paths.data_dir), identity)["entries"] == []
+
+
+def test_a_ledger_failure_fails_the_run_and_keeps_the_notes(tree):
+    write_memory(tree, "proj", "known.txt")
+    add_session(tree, "proj", SESSION_ID, chat())
+    result = daily.run_daily(tree, "r1", call=FakeCall(reply_of(note())))
+    assert result["status"] == daily.STATUS_FAILED
+    assert "ledger update" in result["stop_reason"]
+    assert result["ledger"] is None
+    assert len(notes_on_disk(tree)) == 1
+    assert state_entries(tree)[f"proj/{SESSION_ID}"]["pending"] is None
+

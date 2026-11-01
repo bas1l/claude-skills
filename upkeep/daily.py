@@ -22,6 +22,10 @@ Written under the data folder:
     notes/<date>/<window>/               window.json, counts.json, usage.jsonl, chunk-NNN.json
     counts/<date>/<window>.json          counts by script, including count-only sessions
     logs/usage.jsonl                     one line per model call across runs
+    ledgers/                             a ledger for each new item, entries from notes, flags
+
+Ledgers are brought up to date after the sessions, whatever happened to them, because notes
+already on disk are valid. A ledger failure fails the run and leaves the notes as they are.
 
 ``<date>`` is the local date of the end of the window, so a resumed window keeps its folder.
 """
@@ -36,9 +40,12 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import backfill
 import extract
+import ledger
 import memory_store
 import model_call
 import schemas
@@ -157,6 +164,21 @@ def _missing_pinned_sessions(state: Mapping[str, Any], discovered: Sequence[sess
     )
 
 
+def _update_ledgers(config: Config, as_of: datetime) -> dict[str, Any]:
+    """New items get a ledger, notes become entries, and the revision flags are recomputed."""
+    ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
+    synced = backfill.sync_items(config, as_of)
+    notes = ledger.apply_notes(os.path.join(config.paths.data_dir, "notes"), ledgers_dir)
+    flags = ledger.write_flags(ledgers_dir, as_of, config.ledger)
+    return {
+        "items": synced["items"],
+        "ledgers_created": synced[ledger.OUTCOME_CREATED],
+        "absent_from_inventory": len(synced["absent_from_inventory"]),
+        "notes": notes,
+        "revision_flags": len(flags),
+    }
+
+
 def run_daily(
     config: Config,
     run_id: str,
@@ -223,6 +245,13 @@ def run_daily(
     except (transcripts.TranscriptFormatError, model_call.ModelCallError) as error:
         stop_reason = f"{type(error).__name__}: {error}"
 
+    ledger_summary: Optional[dict[str, Any]] = None
+    try:
+        ledger_summary = _update_ledgers(config, datetime.now(timezone.utc))
+    except (ledger.LedgerError, backfill.InventoryError, schemas.SchemaError, json.JSONDecodeError, KeyError) as error:
+        ledger_failure = f"ledger update: {type(error).__name__}: {error}"
+        stop_reason = ledger_failure if stop_reason is None else f"{stop_reason}; {ledger_failure}"
+
     if stop_reason is not None or failed or snapshot["errors"]:
         status = STATUS_FAILED
     elif budget_stopped:
@@ -257,6 +286,7 @@ def run_daily(
             "empty": len(snapshot[memory_store.RESULT_EMPTY]),
             "errors": snapshot["errors"],
         },
+        "ledger": ledger_summary,
         "data_commit": data_commit,
     }
 

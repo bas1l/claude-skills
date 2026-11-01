@@ -35,9 +35,9 @@ WINDOW_SCHEMA_VERSION = 1
 CHUNK_SCHEMA_VERSION = 2
 PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "extract.md")
 
-QUOTE_VERIFIED = "verified"
-QUOTE_NOT_FOUND = "not_found"
-QUOTE_NONE = "no_quote"
+QUOTE_VERIFIED = schemas.QUOTE_VERIFIED
+QUOTE_NOT_FOUND = schemas.QUOTE_NOT_FOUND
+QUOTE_NONE = schemas.QUOTE_NONE
 
 
 class WindowMismatchError(ValueError):
@@ -228,6 +228,7 @@ def extract_window(
             "notes_schema_version": schemas.NOTES_SCHEMA_VERSION,
             "run_id": run_id,
             "session_id": item.files.session_id,
+            "project_folder": item.files.project_folder,
             "project_cwd": item.project_cwd,
             "chunk": chunk.number,
             "chunk_total": chunk.total,

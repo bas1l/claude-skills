@@ -186,6 +186,16 @@ These came from running Phase 1 code on real data. Measured figures stay in loca
 - **A long Bash tool command fails with `ENAMETOOLONG`:** the same fault as in the trials, hit again while building this. Long text went through files instead.
 - **A window can stick:** if records stamped inside a pinned window appear after an interruption, its chunks differ from those recorded and the session fails on every run with `WindowMismatchError`, reported by id. Clearing it means deleting that window's folder by hand. Not seen in real data.
 
+## Found while building the ledgers
+
+- **Most memories have no surviving origin.** Memory files often carry a session stamp in their frontmatter. For the untraced memories that have one, none of the stamped sessions still has a transcript on this PC. Where both exist, the stamp and the traced `Write` nearly always name the same session, so the trace is sound and the gap is in the transcripts. The stamp is compared for the report and is not used as the origin.
+- **Some of the untraced memories are named only in shell commands.** A `Bash` or `PowerShell` call may have written them, but such a call is not parsed as a write, since the rule accepts only `Write` and `Edit`.
+- **`api-request-blob` records repeat request content, including tool calls, with no timestamp.** They are bookkeeping, not calls, and reading them as calls would double-count. Only conversation records are read.
+- **Frontmatter is not always valid YAML.** A description can start with a quote mark and continue as plain text. `backfill.py` reads a narrow line grammar and raises on any other line. Runtime code is standard library only, so `ruamel.yaml` is not used for this read-only step. Nothing writes frontmatter.
+- **Scanning all transcripts** took under a minute at below-normal priority, single process, because most lines are rejected by a byte check before parsing.
+- **Notes written before schema version 2 cannot name items:** they hold no field for it and no stance, so they add no entries.
+- **A real tool-less model call** with the changed prompt, on a synthetic session, returned valid `items`: `against` for a memory the user corrected, `for` for a hook that worked, and nothing for a skill mentioned as unused.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.

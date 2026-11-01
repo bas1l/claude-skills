@@ -50,6 +50,10 @@ Return one object per finding, with exactly these fields:
 - `origin_of_point`: where the point came from: `user`, `assistant`, `subagent`, `teammate`, `hook`, `tool_result`, `paste` or `web`.
 - `route`: where a fix would go: `memory`, `skill`, `hook`, `mcp`, `global_rule`, `script_count` for something a script should count across sessions, or `none`.
 - `confidence`: `high`, `medium` or `low`.
+- `items`: the saved items this finding speaks about, as a list, empty if none. Name only an item the session itself names or plainly shows being used. Each is an object with exactly these fields:
+  - `kind`: `memory`, `skill`, `hook`, `mcp` or `plugin`.
+  - `name`: a memory's file name without `.md`, a skill's name without any slash, a hook's script name without its extension, a tool server's name, or a plugin's name. Copy it as the session shows it.
+  - `stance`: `for` if the finding shows the item right or useful in this session, `against` if it shows the item wrong or harmful, `no_bearing` if it is mentioned without showing either. An item that was simply not used, or was loaded and ignored, is `no_bearing`: not being used is never evidence against an item.
 
 ## Output
 

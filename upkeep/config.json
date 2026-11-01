@@ -67,5 +67,19 @@
       ["jwt", "eyJ[A-Za-z0-9_\\-]{15,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{5,}"],
       ["pem", "-----BEGIN [A-Z ]*PRIVATE KEY-----"]
     ]
+  },
+  "inventory": {
+    "skills_dir": "~/.claude/skills",
+    "settings_file": "~/.claude/settings.json",
+    "optional_settings_files": ["~/.claude/settings.local.json"],
+    "plugins_manifest": "~/.claude/skills/setup/plugins-mcp.json",
+    "user_config": "~/.claude.json"
+  },
+  "ledger": {
+    "direct_against_entries": 1,
+    "inferred_against_entries": 3,
+    "inferred_window_days": 28,
+    "stated_limit_patterns": ["(?i)\\bfor now\\b", "(?i)\\bfor the moment\\b", "(?i)\\bfor the time being\\b", "(?i)\\binterim\\b", "(?i)\\buntil further notice\\b"],
+    "origin_tools": ["Write", "Edit"]
   }
 }

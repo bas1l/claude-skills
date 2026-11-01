@@ -14,6 +14,7 @@ from conftest import SESSION_ID, assistant_text, human, user_with_origin, write_
 import daily
 import memory_store
 from config import load_config
+from conftest import synthetic_inventory
 
 SCRIPT = Path(__file__).resolve().parent.parent / "Invoke-Upkeep.ps1"
 REAL_CONFIG = SCRIPT.parent / "config.json"
@@ -50,6 +51,7 @@ def setup(tmp_path):
     }
     raw["sessions"]["start_date"] = "2020-01-01T00:00:00+00:00"
     raw["memory"] = {"author_name": "Test Author", "author_email": "test@example.invalid"}
+    raw["inventory"] = synthetic_inventory(tmp_path)
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(str(config_path))

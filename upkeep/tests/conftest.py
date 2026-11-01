@@ -90,6 +90,25 @@ def write_jsonl(path: Path, records: Iterable[dict]) -> str:
     return str(path)
 
 
+def synthetic_inventory(root: Path) -> dict[str, Any]:
+    """An empty inventory under ``root``, as the ``inventory`` section of the config."""
+    skills = root / "inventory" / "skills"
+    skills.mkdir(parents=True)
+    settings = root / "inventory" / "settings.json"
+    settings.write_text("{}", encoding="utf-8")
+    manifest = root / "inventory" / "manifest.json"
+    manifest.write_text('{"plugins": [], "mcpServers": []}', encoding="utf-8")
+    user_config = root / "inventory" / "user_config.json"
+    user_config.write_text("{}", encoding="utf-8")
+    return {
+        "skills_dir": str(skills),
+        "settings_file": str(settings),
+        "optional_settings_files": [],
+        "plugins_manifest": str(manifest),
+        "user_config": str(user_config),
+    }
+
+
 @pytest.fixture
 def config():
     return load_config()

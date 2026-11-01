@@ -78,6 +78,24 @@ class SecretsConfig:
 
 
 @dataclass(frozen=True)
+class InventoryConfig:
+    skills_dir: str
+    settings_file: str
+    optional_settings_files: tuple[str, ...]
+    plugins_manifest: str
+    user_config: str
+
+
+@dataclass(frozen=True)
+class LedgerConfig:
+    direct_against_entries: int
+    inferred_against_entries: int
+    inferred_window_days: int
+    stated_limit_patterns: tuple[str, ...]
+    origin_tools: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     paths: PathsConfig
     sessions: SessionsConfig
@@ -87,6 +105,8 @@ class Config:
     counts: CountsConfig
     memory: MemoryConfig
     secrets: SecretsConfig
+    inventory: InventoryConfig
+    ledger: LedgerConfig
 
 
 def _expand_path(value: str) -> str:
@@ -121,6 +141,8 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("counts", CountsConfig),
         ("memory", MemoryConfig),
         ("secrets", SecretsConfig),
+        ("inventory", InventoryConfig),
+        ("ledger", LedgerConfig),
     ):
         _check_keys(section, raw[section], section_type)
 
@@ -128,6 +150,8 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
     cuts = raw["cuts"]
     model = raw["model"]
     counts = raw["counts"]
+    inventory = raw["inventory"]
+    ledger = raw["ledger"]
     return Config(
         paths=PathsConfig(**{key: _expand_path(value) for key, value in raw["paths"].items()}),
         sessions=SessionsConfig(
@@ -147,6 +171,20 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ),
         memory=MemoryConfig(**raw["memory"]),
         secrets=SecretsConfig(patterns=tuple((name, pattern) for name, pattern in raw["secrets"]["patterns"])),
+        inventory=InventoryConfig(
+            skills_dir=_expand_path(inventory["skills_dir"]),
+            settings_file=_expand_path(inventory["settings_file"]),
+            optional_settings_files=tuple(_expand_path(p) for p in inventory["optional_settings_files"]),
+            plugins_manifest=_expand_path(inventory["plugins_manifest"]),
+            user_config=_expand_path(inventory["user_config"]),
+        ),
+        ledger=LedgerConfig(
+            **{
+                **ledger,
+                "stated_limit_patterns": tuple(ledger["stated_limit_patterns"]),
+                "origin_tools": tuple(ledger["origin_tools"]),
+            }
+        ),
     )
 
 

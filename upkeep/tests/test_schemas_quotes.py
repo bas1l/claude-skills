@@ -24,6 +24,7 @@ def note(**overrides):
         "origin_of_point": "user",
         "route": "memory",
         "confidence": "high",
+        "items": [],
     }
     values.update(overrides)
     return values
@@ -36,6 +37,19 @@ def reply(*notes):
 def test_valid_output_is_parsed():
     parsed, = schemas.parse_notes(reply(note()))
     assert parsed.endorsement_quote == "keep it short"
+
+
+def test_a_note_can_name_items_and_writes_them_as_a_list():
+    parsed, = schemas.parse_notes(reply(note(items=[{"kind": "skill", "name": "a-skill", "stance": "no_bearing"}])))
+    assert parsed.items == (schemas.NoteItem("skill", "a-skill", "no_bearing"),)
+    assert parsed.to_json()["items"] == [{"kind": "skill", "name": "a-skill", "stance": "no_bearing"}]
+
+
+def test_a_new_note_must_have_the_items_field():
+    values = note()
+    del values["items"]
+    with pytest.raises(schemas.SchemaError):
+        schemas.parse_notes(reply(values))
 
 
 def test_empty_list_is_valid():
@@ -72,6 +86,13 @@ def test_malformed_output_raises(raw):
         {"origin_of_point": "alien"},
         {"route": "alien"},
         {"confidence": "alien"},
+        {"items": "a string"},
+        {"items": ["a string"]},
+        {"items": [{"kind": "memory", "name": "x"}]},
+        {"items": [{"kind": "alien", "name": "x", "stance": "for"}]},
+        {"items": [{"kind": "memory", "name": " ", "stance": "for"}]},
+        {"items": [{"kind": "memory", "name": "x", "stance": "unused"}]},
+        {"items": [{"kind": "memory", "name": "x", "stance": "for", "extra": 1}]},
         {"endorsement": "said", "endorsement_quote": ""},
         {"endorsement": "none", "endorsement_quote": "a quote where none belongs"},
         {"unexpected": 1},

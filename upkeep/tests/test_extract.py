@@ -26,6 +26,7 @@ def note(**overrides):
         "origin_of_point": "user",
         "route": "memory",
         "confidence": "high",
+        "items": [],
     }
     values.update(overrides)
     return values
