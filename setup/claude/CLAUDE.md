@@ -53,7 +53,6 @@ After installing or removing a plugin or MCP server on a machine, refresh the ma
 
 ## Guidance files
 
-<!-- Add pointers to detailed guidance here, e.g.:
-- [Coding conventions](./guidance/coding.md) — read before writing implementation code
-- [Research workflow](./guidance/research.md) — read before starting a literature search
-Load each only when the task needs it. -->
+Load each only when the task needs it.
+
+- [Claude Code features](~/.claude/skills/setup/claude/guidance/claude-code-features.md) — read before adding or changing a Claude Code customisation (instruction, rule, memory, skill, subagent, hook, permission, MCP server, plugin, setting), or when asked which feature fits a purpose

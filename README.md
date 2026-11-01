@@ -61,6 +61,7 @@ review the diff and commit it. Capture stops if an MCP server's URL or arguments
 | `hooks/tldr-gate/` | TL;NR summary gate (UserPromptSubmit + Stop hooks) | Referenced in place by `settings.json` |
 | `hooks/session-colocate/` | SessionStart hook: moves the session's `%TEMP%` dir (scratchpad, tasks) next to its transcript and leaves a junction ([README](hooks/session-colocate/README.md)) | Referenced in place by `settings.json` |
 | `setup/claude/CLAUDE.md` | Global instructions | `~/.claude/CLAUDE.md` is a one-line `@import` of it |
+| `setup/claude/guidance/` | Guidance read on demand ([which Claude Code feature for which purpose](setup/claude/guidance/claude-code-features.md)) | Pointer in `setup/claude/CLAUDE.md`, read in place |
 | `setup/claude/commands/` | Slash commands (`/polish`) | Copied to `~/.claude/commands/` |
 | `setup/claude/hooks/` | Brainstorm SessionStart nudge, speak / on-stop scripts | Copied to `~/.claude/hooks/` (their state flags live there) |
 | `setup/settings.hooks.json` | Hook registrations and `cleanupPeriodDays` | Merged into `~/.claude/settings.json`, which keeps its other keys; the events and top-level keys listed in the template are replaced |
