@@ -28,6 +28,7 @@ _KIND_LABEL = {
     "memory_deletion": "Text to remove from memory",
     "memory_revision": "Memory to reread and revise",
     "item_revision": "Item to reread and revise",
+    "monthly_finding": "Finding of the monthly check, for you to read and decide",
 }
 _APPROVE_DOES = {
     "skill": "creates a local branch of the skills repository holding the draft. Nothing is merged or pushed.",
@@ -39,6 +40,7 @@ _APPROVE_DOES = {
     "memory_deletion": "takes this out of the memory as a new commit, which can be reverted.",
     "memory_revision": "you and the session reread it together. Nothing changes by itself.",
     "item_revision": "you and the session reread it together. Nothing changes by itself.",
+    "monthly_finding": "you and the session read it together, and make any edit you ask for. Nothing changes by itself.",
 }
 _BASIS_LABEL = {
     "": None,
@@ -199,6 +201,19 @@ def _research(research: Optional[Mapping[str, Any]]) -> str:
 
 def _evidence(evidence: Mapping[str, Any]) -> str:
     parts = []
+    if evidence.get("audit_question"):
+        parts.append(_para(f"Monthly question: {evidence['audit_question']}."))
+    sides = "".join(
+        f'<li><code>{_text(side["file"])}</code>, line {_text(side["line"])}'
+        + (f'<blockquote>{_text(side["quote"])}</blockquote>' if side["quote"] else "")
+        + "</li>"
+        for side in evidence.get("sides", [])
+    )
+    if sides:
+        parts.append(f"<ul>{sides}</ul>")
+    measured = "".join(f"<li>{_text(line)}</li>" for line in evidence.get("measured", []))
+    if measured:
+        parts.append(f"<ul>{measured}</ul>")
     failure = evidence.get("failure")
     if failure:
         parts.append(_para(

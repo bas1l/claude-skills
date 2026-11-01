@@ -68,6 +68,7 @@ import extract
 import ledger
 import memory_store
 import model_call
+import pass_support
 import research
 import review_data
 import schemas
@@ -112,19 +113,9 @@ def report_dir_of(config: Config, week: str) -> str:
     return os.path.join(config.paths.data_dir, "reports", week)
 
 
-def _write_json(path: str, document: Mapping[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    extract.write_json_atomic(path, document)
-
-
-def _read_text(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
-def _read_json(path: str) -> Any:
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+_write_json = pass_support.write_json
+_read_text = pass_support.read_text
+_read_json = pass_support.read_json
 
 
 def weekly_state_path(config: Config) -> str:
@@ -157,57 +148,7 @@ def daily_completed_on(config: Config, local_date: datetime) -> bool:
     return any(_read_json(path)["status"] == daily.STATUS_OK for path in glob.glob(pattern))
 
 
-class _Caller:
-    """Model calls of this pass, tracked, with the pass's remaining budget."""
-
-    def __init__(self, config: Config, week: str, run_id: str, spent_before: float, call: Callable[..., model_call.ModelResult]):
-        self.config = config
-        self.call = call
-        self.spent_before = spent_before
-        self.usage_log = os.path.join(report_dir_of(config, week), "usage.jsonl")
-        self.totals = daily.RunTotals(os.path.join(config.paths.data_dir, "logs", "usage.jsonl"), run_id)
-
-    def remaining(self) -> float:
-        left = self.config.model.run_budget_usd - self.spent_before - self.totals.cost_usd
-        if left <= 0:
-            raise model_call.BudgetExhaustedError(f"the run budget of {self.config.model.run_budget_usd} is spent")
-        return left
-
-    def tracked(self, key: str) -> Callable[..., model_call.ModelResult]:
-        return self.totals.wrap(self.call, key)
-
-
-def _cached_or_called_reply(
-    path: str, prompt: str, stdin_text: str, model: str, key: str, caller: _Caller, parse: Callable[[str], Any]
-) -> Any:
-    """A tool-less call, or its reply from an earlier run of this week if the input is the same."""
-    digest = hashlib.sha256(f"{prompt}\n{stdin_text}".encode("utf-8")).hexdigest()
-    if os.path.exists(path):
-        cached = _read_json(path)
-        if cached["input_sha256"] == digest:
-            return parse(cached["reply"])
-    config = caller.config
-    result = caller.tracked(key)(
-        prompt=prompt,
-        stdin_text=stdin_text,
-        tools=(),
-        model=model,
-        max_budget_usd=caller.remaining(),
-        cwd=config.paths.run_dir,
-        claude_exe=config.paths.claude_exe,
-        model_config=config.model,
-        chunking_config=config.chunking,
-        usage_log_path=caller.usage_log,
-    )
-    try:
-        parsed = parse(result.text)
-    except schemas.SchemaError:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(f"{path}.rejected", "w", encoding="utf-8") as handle:
-            handle.write(result.text)
-        raise
-    _write_json(path, {"input_sha256": digest, "reply": result.text})
-    return parsed
+_cached_or_called_reply = pass_support.cached_or_called_reply
 
 
 def _declined_lines(decisions: Sequence[Mapping[str, Any]], scope_test: Callable[[str], bool]) -> str:
@@ -394,25 +335,14 @@ def _memory_proposal(kind: str, name: str, folder: str, title: str, what: str, w
 
 
 def _private_material(config: Config, local: LocalSettings, windows: Sequence[weekly_notes.Window], discovered: Sequence[sessions.SessionFiles]) -> research.PrivateMaterial:
-    """What may not reach a search engine, worked out from what this machine holds."""
-    terms = list(local.private_terms)
-    terms.append(os.path.basename(os.path.expanduser("~")))
-    terms.extend(os.path.basename(os.path.normpath(window.project_cwd)) for window in windows)
-    terms.extend(files.project_folder for files in discovered)
-    texts = []
-    for folder in memory_store.memory_folders(config.paths.projects_dir):
-        for name in memory_store.list_files(folder):
-            if name.endswith(".md") and name != memory_store.INDEX_FILE:
-                if "-" in name:
-                    terms.append(name[:-3])
-                texts.append(memory_store.read_memory_file(os.path.join(folder, name)))
-    return research.build_private_material(terms, texts, config.research.memory_shingle_words)
+    names = [os.path.basename(os.path.normpath(window.project_cwd)) for window in windows]
+    return pass_support.private_material(config, local, names, [files.project_folder for files in discovered])
 
 
 def _research_candidates(
     candidates: list[dict[str, Any]],
     private: research.PrivateMaterial,
-    caller: _Caller,
+    caller: pass_support.Caller,
     week: str,
     rejected: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -729,7 +659,7 @@ def _run_stages(
     local: LocalSettings,
     week: str,
     run_id: str,
-    caller: _Caller,
+    caller: pass_support.Caller,
     now: datetime,
     report: dict[str, Any],
 ) -> None:
@@ -898,7 +828,7 @@ def run_weekly(
             result["budget_stopped"] = True
 
     report = _empty_report(week, run_id, now, local.apply_memory_changes)
-    caller = _Caller(config, week, run_id, daily_cost, call)
+    caller = pass_support.Caller(config, report_dir_of(config, week), run_id, daily_cost, call)
     if result["status"] == STATUS_OK:
         try:
             _run_stages(config, local, week, run_id, caller, now, report)

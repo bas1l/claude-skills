@@ -133,6 +133,32 @@ class ReviewConfig:
 
 
 @dataclass(frozen=True)
+class MonthlyConfig:
+    global_claude_file: str
+    global_rules_dir: str
+    coherence_model: str
+    duplicates_model: str
+    quality_model: str
+    description_model: str
+    group_chars: int
+    import_max_hops: int
+    index_lines_loaded: int
+    index_bytes_loaded: int
+    duplicate_cosine_min: float
+    duplicate_cluster_max_members: int
+    duplicate_section_min_words: int
+    quote_min_chars: int
+    quality_min_weeks: int
+    tunable_settings: tuple[str, ...]
+    replacement_skills_per_month: int
+    skill_opening_chars: int
+    setting_fact_keys: tuple[str, ...]
+    public_project_names: tuple[str, ...]
+    context_largest_shown: int
+    chars_per_token_estimate: float
+
+
+@dataclass(frozen=True)
 class LocalSettings:
     """What differs per machine and stays out of this public repository."""
 
@@ -156,6 +182,7 @@ class Config:
     weekly: WeeklyConfig
     research: ResearchConfig
     review: ReviewConfig
+    monthly: MonthlyConfig
 
 
 def _expand_path(value: str) -> str:
@@ -195,6 +222,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("weekly", WeeklyConfig),
         ("research", ResearchConfig),
         ("review", ReviewConfig),
+        ("monthly", MonthlyConfig),
     ):
         _check_keys(section, raw[section], section_type)
 
@@ -204,6 +232,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
     counts = raw["counts"]
     inventory = raw["inventory"]
     ledger = raw["ledger"]
+    monthly = raw["monthly"]
     return Config(
         paths=PathsConfig(**{key: _expand_path(value) for key, value in raw["paths"].items()}),
         sessions=SessionsConfig(
@@ -240,6 +269,14 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         weekly=WeeklyConfig(**{**raw["weekly"], "memory_excluded_origins": tuple(raw["weekly"]["memory_excluded_origins"])}),
         research=ResearchConfig(**{**raw["research"], "public_path_fragments": tuple(raw["research"]["public_path_fragments"])}),
         review=ReviewConfig(**raw["review"]),
+        monthly=MonthlyConfig(**{
+            **monthly,
+            "global_claude_file": _expand_path(monthly["global_claude_file"]),
+            "global_rules_dir": _expand_path(monthly["global_rules_dir"]),
+            "tunable_settings": tuple(monthly["tunable_settings"]),
+            "setting_fact_keys": tuple(monthly["setting_fact_keys"]),
+            "public_project_names": tuple(monthly["public_project_names"]),
+        }),
     )
 
 

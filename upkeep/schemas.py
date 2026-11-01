@@ -542,6 +542,118 @@ def validate_weekly_report(document: Any, where: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Monthly pass: audit replies as the model returns them, and the report.
+# ---------------------------------------------------------------------------
+
+KIND_MONTHLY_FINDING = "monthly_finding"
+STALE_PATH_GONE = "path_gone"
+STALE_STATED_LIMIT = "stated_limit"
+STALE_SUPERSEDED = "superseded"
+# No ground means "not used lately": staleness has to rest on something a script or a reader can check.
+STALE_GROUNDS = frozenset({STALE_PATH_GONE, STALE_STATED_LIMIT, STALE_SUPERSEDED})
+LEVEL_TO_GLOBAL = "to_global"
+LEVEL_TO_PROJECT = "to_project"
+LEVEL_DIRECTIONS = frozenset({LEVEL_TO_GLOBAL, LEVEL_TO_PROJECT})
+VERDICT_SAME = "same"
+VERDICT_DIFFERENT = "different"
+DUPLICATE_VERDICTS = frozenset({VERDICT_SAME, VERDICT_DIFFERENT})
+SIDE_FIELDS = frozenset({"file", "line", "quote"})
+MONTHLY_REPORT_SCHEMA_VERSION = 1
+MONTHLY_REPORT_FIELDS = frozenset({
+    "schema_version", "month", "run_id", "generated_at", "status", "stop_reason", "context", "coverage", "counts",
+    "findings", "rejected", "already_raised", "duplicate_candidates", "quality", "replacements", "usage",
+})
+
+
+def _validate_sides(values: Any, where: str) -> None:
+    if not isinstance(values, list):
+        raise SchemaError(f"{where}: sides must be a list")
+    for index, side in enumerate(values):
+        place = f"{where} side {index}"
+        _exact_fields(side, SIDE_FIELDS, place)
+        _nonempty_string(side, "file", place)
+        _nonempty_string(side, "quote", place)
+        if not isinstance(side["line"], int) or isinstance(side["line"], bool) or side["line"] < 1:
+            raise SchemaError(f"{place}: line must be a whole number from 1")
+
+
+def _validate_entries(document: Mapping[str, Any], key: str, wanted: frozenset[str], texts: tuple[str, ...]) -> None:
+    for index, entry in enumerate(_list_of(document, key)):
+        where = f"{key} {index}"
+        _exact_fields(entry, wanted, where)
+        for name in texts:
+            _nonempty_string(entry, name, where)
+        _validate_sides(entry["sides"], where)
+
+
+def parse_monthly_coherence(raw: str) -> dict[str, Any]:
+    """Exactly ``{"contradictions": [...], "stale": [...], "level_moves": [...]}``. Shape only:
+    whether the citations hold is the gate's question."""
+    document = _single_json_object(raw, frozenset({"contradictions", "stale", "level_moves"}))
+    _validate_entries(document, "contradictions", frozenset({"title", "what", "why", "sides"}), ("title", "what", "why"))
+    _validate_entries(document, "stale", frozenset({"title", "question", "ground", "why", "sides"}), ("title", "question", "why"))
+    for index, entry in enumerate(document["stale"]):
+        _enum(entry, "ground", STALE_GROUNDS, f"stale {index}")
+        if not entry["question"].rstrip().endswith("?"):
+            raise SchemaError(f"stale {index}: staleness must be put as a question")
+    _validate_entries(document, "level_moves", frozenset({"title", "what", "why", "direction", "exact_change", "sides"}), ("title", "what", "why"))
+    for index, entry in enumerate(document["level_moves"]):
+        _enum(entry, "direction", LEVEL_DIRECTIONS, f"level_moves {index}")
+        _string(entry, "exact_change", f"level_moves {index}")
+    return document
+
+
+def parse_monthly_duplicates(raw: str) -> list[dict[str, Any]]:
+    """Exactly ``{"clusters": [...]}``, one verdict per cluster."""
+    document = _single_json_object(raw, frozenset({"clusters"}))
+    wanted = frozenset({"cluster", "verdict", "reason", "title", "what", "why", "exact_change", "sides"})
+    _validate_entries(document, "clusters", wanted, ("cluster", "reason"))
+    for index, entry in enumerate(document["clusters"]):
+        where = f"clusters {index}"
+        _enum(entry, "verdict", DUPLICATE_VERDICTS, where)
+        _string(entry, "exact_change", where)
+        if entry["verdict"] == VERDICT_SAME:
+            _nonempty_string(entry, "title", where)
+            _nonempty_string(entry, "what", where)
+            _nonempty_string(entry, "why", where)
+    return document["clusters"]
+
+
+def parse_monthly_quality(raw: str) -> list[dict[str, Any]]:
+    """Exactly ``{"suggestions": [{"setting", "suggested", "why"}]}``."""
+    document = _single_json_object(raw, frozenset({"suggestions"}))
+    for index, entry in enumerate(_list_of(document, "suggestions")):
+        where = f"suggestion {index}"
+        _exact_fields(entry, frozenset({"setting", "suggested", "why"}), where)
+        _nonempty_string(entry, "setting", where)
+        _nonempty_string(entry, "why", where)
+        if not isinstance(entry["suggested"], (int, float)) or isinstance(entry["suggested"], bool):
+            raise SchemaError(f"{where}: suggested must be a number")
+    return document["suggestions"]
+
+
+def parse_monthly_descriptions(raw: str) -> dict[str, str]:
+    """Exactly ``{"descriptions": [{"skill", "description"}]}``, as a mapping by skill."""
+    document = _single_json_object(raw, frozenset({"descriptions"}))
+    found: dict[str, str] = {}
+    for index, entry in enumerate(_list_of(document, "descriptions")):
+        where = f"description {index}"
+        _exact_fields(entry, frozenset({"skill", "description"}), where)
+        found[_nonempty_string(entry, "skill", where)] = _nonempty_string(entry, "description", where)
+    return found
+
+
+def validate_monthly_report(document: Any, where: str) -> None:
+    """Raise unless this is a well-formed monthly report. The format is described in monthly.py."""
+    _exact_fields(document, MONTHLY_REPORT_FIELDS, where)
+    if document["schema_version"] != MONTHLY_REPORT_SCHEMA_VERSION:
+        raise SchemaError(f"{where}: schema_version {document['schema_version']!r}")
+    for index, finding in enumerate(document["findings"]):
+        _exact_fields(finding, WEEKLY_PROPOSAL_FIELDS, f"{where} finding {index}")
+        _enum(finding, "kind", frozenset({KIND_MONTHLY_FINDING}), f"{where} finding {index}")
+
+
+# ---------------------------------------------------------------------------
 # The review: review.json, the source of truth of a review session.
 # ---------------------------------------------------------------------------
 

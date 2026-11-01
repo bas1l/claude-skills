@@ -112,5 +112,33 @@
     "skills_base_branch": "master",
     "skills_branch_prefix": "upkeep/",
     "failures_shown": 10
+  },
+  "monthly": {
+    "global_claude_file": "~/.claude/CLAUDE.md",
+    "global_rules_dir": "~/.claude/rules",
+    "coherence_model": "opus",
+    "duplicates_model": "sonnet",
+    "quality_model": "sonnet",
+    "description_model": "sonnet",
+    "group_chars": 400000,
+    "import_max_hops": 4,
+    "index_lines_loaded": 200,
+    "index_bytes_loaded": 25000,
+    "duplicate_cosine_min": 0.3,
+    "duplicate_cluster_max_members": 8,
+    "duplicate_section_min_words": 8,
+    "quote_min_chars": 8,
+    "quality_min_weeks": 4,
+    "tunable_settings": [
+      "weekly.recurrence_sessions", "weekly.costly_once_tool_calls", "weekly.failure_min_commands_lost",
+      "weekly.max_deletions_per_pass", "ledger.direct_against_entries", "ledger.inferred_against_entries",
+      "ledger.inferred_window_days"
+    ],
+    "replacement_skills_per_month": 3,
+    "skill_opening_chars": 2000,
+    "setting_fact_keys": ["attribution", "includeCoAuthoredBy"],
+    "public_project_names": ["projects", "skills", "Documents", "Desktop", "Downloads", "upkeep", "run", "review", "temp", "gui", "experiment", "wiki", "scratch", ".claude"],
+    "context_largest_shown": 8,
+    "chars_per_token_estimate": 4
   }
 }

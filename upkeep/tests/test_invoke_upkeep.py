@@ -166,11 +166,40 @@ def test_missing_local_settings_fails_loudly(setup):
     assert "local settings file not found" in completed.stderr
 
 
-def test_unbuilt_pass_fails_loudly(setup):
+def test_unbuilt_pass_fails_loudly(setup, tmp_path):
     config_path, _, _ = setup
-    completed = invoke(config_path, "monthly")
+    lone_script = tmp_path / "lone" / "Invoke-Upkeep.ps1"
+    lone_script.parent.mkdir()
+    shutil.copy(SCRIPT, lone_script)
+    completed = subprocess.run(
+        [pwsh(), "-NoProfile", "-NonInteractive", "-File", str(lone_script), "-Pass", "monthly", "-ConfigPath", str(config_path)],
+        capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW, check=False,
+    )
     assert completed.returncode == 1
     assert "not built yet" in completed.stderr
+
+
+def test_monthly_pass_runs_writes_its_results_and_does_nothing_on_a_retry(setup, tmp_path):
+    config_path, data, _ = setup
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    instructions = tmp_path / "CLAUDE.md"
+    instructions.write_text("# Style\n\nWrite plainly.\n", encoding="utf-8")
+    raw["monthly"]["global_claude_file"] = str(instructions)
+    raw["monthly"]["global_rules_dir"] = str(tmp_path / "rules")
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    (data / "local.json").write_text(json.dumps({"python_exe": sys.executable, "apply_memory_changes": False, "private_terms": []}), encoding="utf-8")
+    reply = {**FAKE_RESULT, "result": '{"contradictions": [], "stale": [], "level_moves": []}'}
+    (tmp_path / "fake_claude.py").write_text(f"print({json.dumps(json.dumps(reply))})\n", encoding="utf-8")
+
+    completed = invoke(config_path, "monthly")
+    assert completed.returncode == 0, completed.stderr
+    feeds = list((data / "reports" / "monthly").glob("*.json"))
+    assert len(feeds) == 1 and marker_of(data) is None
+    assert not (data / "upkeep.lock").exists()
+
+    second = invoke(config_path, "monthly")
+    assert second.returncode == 0, second.stderr
+    assert len(list((data / "logs").glob("monthly-*.result.json"))) >= 1
 
 
 def test_weekly_pass_runs_writes_its_report_and_does_nothing_on_a_retry(setup):

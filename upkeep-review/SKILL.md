@@ -89,6 +89,9 @@ Say what will be written or removed, then run `approve-memory N --review R`. It 
 **`memory_revision`, `item_revision`**
 Nothing is prepared, since the item is a question. Read it with him using `why N`. If he wants an edit, make that edit, and then run `record-approved N --review R --detail "<what changed>"`. If he wants no change, use `reject N`.
 
+**`monthly_finding`**
+Nothing is prepared. The item comes from the monthly check, and `record.evidence` holds the file and line of each side, or what was measured. Read those lines in the files themselves before saying anything about them, since they may have changed. A question about staleness is his to answer: never treat it as settled. If he wants an edit, show it, make it after his yes, and run `record-approved N --review R --detail "<what changed>"`. If he wants no change, use `reject N`, which keeps the same finding out of later months.
+
 ## Why
 
 Run `why N`. It returns the item, its whole ledger, each source note, and the path of each session's transcript.

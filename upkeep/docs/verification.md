@@ -221,6 +221,17 @@ These came from running Phase 1 code on real data. Measured figures stay in loca
 - **Windows Terminal quoting and the launch are not verified:** `wt.exe -d "<folder>" "<claude>" "Run the upkeep-review skill"` was not run, because it opens a window. The click test covers it. No browser was available headless, so the page was checked by reading its HTML, not by looking at it.
 - **The desktop shortcut points at the installed script,** which does not exist until this branch is merged. Until then, the shortcut fails with a message window.
 
+## Found while building the monthly pass
+
+- **Limits checked against the product's memory documentation:** the memory index loads its first 200 lines or 25KB, whichever comes first, and imports reach four hops. Both are in `config.json`.
+- **One of the two known contradictions is in no file.** The instruction to add a co-author line comes from the product when the `attribution` setting is unset. The script therefore writes a line stating whether that setting is set, which a finding can cite like any other text. That the unset setting produces the instruction was seen in sessions and stated in the prompt; it is not read from the product.
+- **The call log confirms who received what:** 6 calls with `--tools ""`, the largest of 441,115 bytes, used no tools. The 3 research calls received about 2,200 bytes each, of which only the description is about the skill.
+- **Readings overlap, so one matter came back several times.** The first real run gave 70 findings, with one setting against rules raised three times. Findings of one kind citing the same line now become one item, keeping what each said: 53 items from the same replies. Two findings on different lines of one matter stay apart.
+- **The check on stated limits rejected 6 stale findings** whose cited line said nothing like "for now". A reader can name a limit stated in other words, so a few real ones may be lost. A rejection is listed in the monthly report, not on the review page.
+- **Measured context is a lower limit.** Most memory folders have no transcript left to say where the project lives, so their project instructions cannot be found. The report counts them. Plugin skills, tool server definitions, the product's own prompt and what session start hooks print are not measured.
+- **A research reply of `adapt` can mean little.** The real run's two replacement findings both said `adapt`, with a reason saying that nothing found fits and the content has to be written anyway. The pass makes a finding from any `adopt` or `adapt` that names a tool, so these reach the review as they are.
+- **Research for a month's skills is taken in name order at first,** so the reference skills came up first.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.
