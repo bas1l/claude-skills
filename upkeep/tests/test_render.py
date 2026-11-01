@@ -161,4 +161,4 @@ def test_timeline_holds_user_entries_and_appears_in_every_chunk(config):
     chunks = render.split_into_chunks(rendered, 260)
     assert len(chunks) > 1
     for chunk in chunks:
-        assert "first request" in render.chunk_input_text(chunk, timeline)
+        assert "first request" in render.chunk_input_text(chunk, timeline, "")

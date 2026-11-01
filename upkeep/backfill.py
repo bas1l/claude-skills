@@ -18,6 +18,11 @@ transcripts, whose result is present and not an error. The earliest one counts. 
 ``Edit``, the call that created the file is in no surviving transcript. A frontmatter session
 stamp is compared with it for the report, and is never used as the origin.
 
+``scan_inventory`` is what the scheduled passes use: a file or a kind it cannot read is listed, and
+the rest are still read, since one item's format is no reason to stop the others. It never gives such
+a file a ledger, because a founding reason is written once and cannot be read from it yet. A manual
+backfill stays strict and stops on the first problem, through ``inventory``.
+
 The transcript scan reads one file at a time as a stream of lines. A line is parsed only if
 it could hold a matching call or its result. Rerunning changes nothing unless there is a new
 item or an origin newly found. An item gone from the inventory keeps its ledger, and is
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import dataclasses
 import json
 import os
 import re
@@ -42,6 +48,7 @@ import render
 import schemas
 import sessions
 import transcripts
+import weekly_notes
 from config import Config, load_config
 
 MEMORY_INDEX = "MEMORY.md"
@@ -57,6 +64,8 @@ _KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):(?:\s+(.*))?$")
 _BLOCK_RE = re.compile(r"^[|>][+-]?$")
 _SCRIPT_RE = re.compile(r"[^\s\"']+\.(?:py|ps1|sh|js|mjs|cmd|bat)(?=$|[\s\"'])", re.I)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+_DOCSTRING_RE = re.compile(r"^(?:\s|#[^\n]*\n)*[rRuU]{0,2}(\"\"\"|\'\'\')(.*?)\1", re.S)
+_SECRET_CONFIG_KEYS = frozenset({"env", "headers"})
 
 _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 _NICE_BELOW_NORMAL = 5
@@ -72,6 +81,10 @@ class Item:
     founding: Mapping[str, Any]
     would_be_wrong: Mapping[str, Any]
     session_stamp: Optional[str] = None
+    description: str = ""
+    aliases: tuple[str, ...] = ()
+    source_path: Optional[str] = None
+    inline_contents: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,7 +109,7 @@ class ScanResult:
 
 def _unquote(value: str) -> str:
     """The text of a value. One that merely starts with a quote mark is plain text, as real
-    files have it, such as ``"Skin location" means where...``; the whole text is kept."""
+    files have it, such as ``"Blue door" means the side entrance...``; the whole text is kept."""
     if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
         try:
             return json.loads(value)
@@ -113,7 +126,8 @@ def read_front_matter(text: str, where: str) -> tuple[dict[str, Any], str]:
     This reads a narrow line grammar and is not a YAML parser, because the runtime uses the
     standard library only and real files hold values YAML rejects, such as a plain value
     with a colon. It knows top-level ``key: value``, quoted values, ``|`` and ``>`` blocks,
-    indented continuation lines, and one level of nested ``key: value``. Any other line raises.
+    indented continuation lines, one level of nested ``key: value``, and a list under a key, indented
+    or starting at the first column. Any other line raises.
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -148,6 +162,9 @@ def read_front_matter(text: str, where: str) -> tuple[dict[str, Any], str]:
         if line[0] in " \t":
             if key is None:
                 raise InventoryError(f"{where}: indented frontmatter line before any key")
+            indented.append(line.strip())
+            continue
+        if line.startswith("- ") and key is not None and values[key] is None:
             indented.append(line.strip())
             continue
         match = _KEY_RE.match(line)
@@ -255,7 +272,14 @@ def _memory_stamp(front: Mapping[str, Any]) -> Optional[str]:
     return front.get("originSessionId")
 
 
-def memory_items(config: Config) -> list[Item]:
+def _problem_or_raise(problems: Optional[list[dict[str, str]]], what: str, error: InventoryError) -> None:
+    if problems is None:
+        raise error
+    problems.append({"what": what, "detail": f"{type(error).__name__}: {error}"})
+
+
+def memory_items(config: Config, problems: Optional[list[dict[str, str]]] = None, unreadable: Optional[set[ledger.ItemId]] = None) -> list[Item]:
+    """With ``problems`` given, a file that cannot be read goes there and in ``unreadable``. Otherwise it raises."""
     items = []
     for folder in memory_store.memory_folders(config.paths.projects_dir):
         project = os.path.basename(os.path.dirname(folder))
@@ -263,28 +287,38 @@ def memory_items(config: Config) -> list[Item]:
             if relative == MEMORY_INDEX:
                 continue
             path = os.path.join(folder, relative)
-            if not relative.endswith(MARKDOWN_SUFFIX):
-                raise InventoryError(f"{path}: a memory folder holds a file that is not Markdown")
-            text = _read_text(path)
-            front, body = read_front_matter(text, path)
-            description = _description(front, path)
+            name = (relative[: -len(MARKDOWN_SUFFIX)] if relative.endswith(MARKDOWN_SUFFIX) else relative).replace(os.sep, "/")
+            item_id = ledger.ItemId(ledger.project_scope(project), ledger.KIND_MEMORY, name)
+            try:
+                if not relative.endswith(MARKDOWN_SUFFIX):
+                    raise InventoryError(f"{path}: a memory folder holds a file that is not Markdown")
+                text = _read_text(path)
+                front, body = read_front_matter(text, path)
+                description = _description(front, path)
+            except InventoryError as error:
+                _problem_or_raise(problems, f"memory file {path}", error)
+                if unreadable is not None:
+                    unreadable.add(item_id)
+                continue
             reasons = why_lines(body)
             founding = (
                 _founding("\n".join(reasons), SOURCE_WHY, config)
                 if reasons
                 else _founding(description, SOURCE_DESCRIPTION, config)
             )
-            name = relative[: -len(MARKDOWN_SUFFIX)].replace(os.sep, "/")
             items.append(Item(
-                id=ledger.ItemId(ledger.project_scope(project), ledger.KIND_MEMORY, name),
+                id=item_id,
                 founding=founding,
                 would_be_wrong=_limits_stated([description or "", body], config),
                 session_stamp=_memory_stamp(front),
+                description=description or "",
+                source_path=path,
             ))
     return items
 
 
-def skill_items(config: Config) -> list[Item]:
+def skill_items(config: Config, problems: Optional[list[dict[str, str]]] = None, unreadable: Optional[set[ledger.ItemId]] = None) -> list[Item]:
+    """With ``problems`` given, a file that cannot be read goes there and in ``unreadable``. Otherwise it raises."""
     root = config.inventory.skills_dir
     if not os.path.isdir(root):
         raise FileNotFoundError(f"skills folder not found: {root}")
@@ -293,12 +327,21 @@ def skill_items(config: Config) -> list[Item]:
         path = os.path.join(root, name, SKILL_FILE)
         if not os.path.isfile(path):
             continue
-        front, _ = read_front_matter(_read_text(path), path)
-        description = _description(front, path)
+        item_id = ledger.ItemId(ledger.SCOPE_GLOBAL, "skill", name)
+        try:
+            front, _ = read_front_matter(_read_text(path), path)
+            description = _description(front, path)
+        except InventoryError as error:
+            _problem_or_raise(problems, f"skill file {path}", error)
+            if unreadable is not None:
+                unreadable.add(item_id)
+            continue
         items.append(Item(
-            id=ledger.ItemId(ledger.SCOPE_GLOBAL, "skill", name),
+            id=item_id,
             founding=_founding(description, SOURCE_DESCRIPTION, config),
             would_be_wrong=_limits_stated([description or ""], config),
+            description=description or "",
+            source_path=path,
         ))
     return items
 
@@ -330,8 +373,27 @@ def _hook_name(hook: Mapping[str, Any], where: str) -> str:
     return _SLUG_RE.sub("-", message.lower()).strip("-")
 
 
+def _hook_script(hook: Mapping[str, Any]) -> Optional[str]:
+    for text in (hook["command"], *hook.get("args", [])):
+        for found in _SCRIPT_RE.findall(text):
+            return found.replace("\\", "/")
+    return None
+
+
+def _docstring_line(path: Optional[str]) -> str:
+    """The first line of a Python script's docstring. Other scripts have no such place, and a script
+    that is gone has nothing to say: then the item is listed by its name and status message."""
+    if path is None or not os.path.isfile(path):
+        return ""
+    match = _DOCSTRING_RE.match(_read_text(path))
+    if match is None:
+        return ""
+    return next((line.strip() for line in match.group(2).splitlines() if line.strip()), "")
+
+
 def hook_items(config: Config) -> list[Item]:
-    names = set()
+    """What a session calls a hook is its status message, so that is kept as a display name."""
+    names: dict[str, dict[str, Any]] = {}
     for path, settings in _settings_documents(config):
         hooks = settings.get("hooks", {})
         if not isinstance(hooks, dict):
@@ -343,8 +405,22 @@ def hook_items(config: Config) -> list[Item]:
             for group in groups:
                 if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
                     raise InventoryError(f"{where}: a group must hold a list named hooks")
-                names.update(_hook_name(hook, where) for hook in group["hooks"])
-    return [_item_with_no_reason("hook", name) for name in sorted(names)]
+                for hook in group["hooks"]:
+                    held = names.setdefault(_hook_name(hook, where), {"aliases": [], "script": None})
+                    message = hook.get("statusMessage")
+                    if isinstance(message, str) and message.strip() and message not in held["aliases"]:
+                        held["aliases"].append(message)
+                    held["script"] = held["script"] or _hook_script(hook)
+    items = []
+    for name in sorted(names):
+        aliases, script = names[name]["aliases"], names[name]["script"]
+        items.append(dataclasses.replace(
+            _item_with_no_reason("hook", name),
+            aliases=tuple(sorted(aliases)),
+            description=_docstring_line(script) or (aliases[0] if aliases else ""),
+            source_path=script,
+        ))
+    return items
 
 
 def _item_with_no_reason(kind: str, name: str) -> Item:
@@ -370,10 +446,13 @@ def _manifest(config: Config) -> tuple[list[Any], list[Any]]:
 def mcp_items(config: Config) -> list[Item]:
     _, listed = _manifest(config)
     names = set()
+    configs: dict[str, str] = {}
     for server in listed:
         if not isinstance(server, dict) or not isinstance(server.get("name"), str):
             raise InventoryError(f"{config.inventory.plugins_manifest}: a server with no name")
         names.add(server["name"])
+        shown = {key: value for key, value in server.get("config", {}).items() if key not in _SECRET_CONFIG_KEYS}
+        configs[server["name"]] = json.dumps(shown, ensure_ascii=False)
     for path, settings in _settings_documents(config):
         names |= _server_names(settings, path)
     user_path = config.inventory.user_config
@@ -384,7 +463,32 @@ def mcp_items(config: Config) -> list[Item]:
         raise InventoryError(f"{user_path}: projects must be an object")
     for project in projects.values():
         names |= _server_names(project, user_path)
-    return [_item_with_no_reason("mcp", name) for name in sorted(names)]
+    return [dataclasses.replace(_item_with_no_reason("mcp", name), inline_contents=configs.get(name, "")) for name in sorted(names)]
+
+
+def _plugin_manifests(config: Config) -> dict[str, str]:
+    """Where each installed plugin's own manifest is, by plugin id."""
+    path = config.inventory.installed_plugins_file
+    installed = _read_json(path).get("plugins")
+    if not isinstance(installed, dict):
+        raise InventoryError(f"{path}: plugins must be an object")
+    found = {}
+    for plugin_id, installs in installed.items():
+        if not isinstance(installs, list) or not installs or not isinstance(installs[0], dict) or not isinstance(installs[0].get("installPath"), str):
+            raise InventoryError(f"{path}: {plugin_id} has no install path")
+        found[plugin_id] = os.path.join(installs[0]["installPath"], ".claude-plugin", "plugin.json")
+    return found
+
+
+def _plugin_item(name: str, manifest: Optional[str]) -> Item:
+    """A plugin not installed here, or with no manifest of its own, is listed by name alone."""
+    item = _item_with_no_reason(ledger.KIND_PLUGIN, name)
+    if manifest is None or not os.path.isfile(manifest):
+        return item
+    description = _read_json(manifest).get("description")
+    if description is not None and not isinstance(description, str):
+        raise InventoryError(f"{manifest}: description is not text")
+    return dataclasses.replace(item, description=description or "", source_path=manifest)
 
 
 def plugin_items(config: Config) -> list[Item]:
@@ -399,7 +503,8 @@ def plugin_items(config: Config) -> list[Item]:
         if not isinstance(enabled, dict):
             raise InventoryError(f"{path}: enabledPlugins must be an object")
         names |= set(enabled)
-    return [_item_with_no_reason(ledger.KIND_PLUGIN, name) for name in sorted(names)]
+    manifests = _plugin_manifests(config)
+    return [_plugin_item(name, manifests.get(name)) for name in sorted(names)]
 
 
 def inventory(config: Config) -> list[Item]:
@@ -412,6 +517,83 @@ def inventory(config: Config) -> list[Item]:
             raise InventoryError(f"two items share one identity on a case-blind file system: {item.id}")
         seen.add(key)
     return items
+
+
+@dataclass(frozen=True)
+class InventoryScan:
+    """What a scheduled pass can tell about the setup. ``could_be_there`` says whether an item may
+    exist: one in a file or a kind that could not be read cannot be called gone."""
+
+    items: tuple[Item, ...]
+    problems: tuple[dict[str, str], ...]
+    unreadable_items: frozenset[ledger.ItemId]
+    unreadable_kinds: frozenset[str]
+
+    def could_be_there(self, identity: Mapping[str, str]) -> bool:
+        if identity["kind"] in self.unreadable_kinds:
+            return True
+        wanted = (identity["scope"], identity["kind"], identity["name"].casefold())
+        return any((found.scope, found.kind, found.name.casefold()) == wanted for found in (*(item.id for item in self.items), *self.unreadable_items))
+
+
+def scan_inventory(config: Config) -> InventoryScan:
+    """Everything that gets a ledger, with what could not be read listed and not raised."""
+    problems: list[dict[str, str]] = []
+    unreadable_items: set[ledger.ItemId] = set()
+    unreadable_kinds: set[str] = set()
+    items = memory_items(config, problems, unreadable_items) + skill_items(config, problems, unreadable_items)
+    for kind, reader in (("hook", hook_items), ("mcp", mcp_items), (ledger.KIND_PLUGIN, plugin_items)):
+        try:
+            items += reader(config)
+        except (InventoryError, json.JSONDecodeError) as error:
+            problems.append({"what": f"every {kind}, from the settings files", "detail": f"{type(error).__name__}: {error}"})
+            unreadable_kinds.add(kind)
+    seen: dict[tuple[str, str, str], Item] = {}
+    for item in items:
+        key = tuple(part.casefold() for part in (item.id.scope, item.id.kind, item.id.name))
+        if key in seen:
+            problems.append({"what": f"{item.id.kind} {item.id.name}", "detail": f"shares one identity on a case-blind file system with {seen[key].id.name}"})
+        else:
+            seen[key] = item
+    return InventoryScan(tuple(seen.values()), tuple(problems), frozenset(unreadable_items), frozenset(unreadable_kinds))
+
+
+def display_names(found: InventoryScan) -> dict[tuple[str, str], tuple[str, ...]]:
+    """What sessions may call an item besides its name: (kind, name in lower case) to the names of
+    the items bearing it. Two items bearing one display name cannot be told apart by it."""
+    names: dict[tuple[str, str], list[str]] = {}
+    for item in found.items:
+        for alias in item.aliases:
+            names.setdefault((item.id.kind, alias.casefold()), []).append(item.id.name)
+    return {key: tuple(value) for key, value in names.items()}
+
+
+def contents_of(item: Item) -> str:
+    """An item's own text as it stands. A file that is gone has none."""
+    if item.source_path is None:
+        return item.inline_contents
+    if not os.path.isfile(item.source_path):
+        return f"The file of this item is gone: {item.source_path}"
+    return _read_text(item.source_path)
+
+
+def known_items_text(config: Config, project_folder: str) -> str:
+    """The names a session of this project folder may speak of, one per line: every global item, and
+    this folder's memories. There are no global memories to add: each folder holds its own."""
+    limit = config.item_check.listing_description_chars
+    scope = ledger.project_scope(project_folder)
+    lines = []
+    for item in scan_inventory(config).items:
+        if item.id.scope not in (ledger.SCOPE_GLOBAL, scope):
+            continue
+        shown = ""
+        if item.aliases:
+            shown = " (shown as " + ", ".join(f'"{alias}"' for alias in item.aliases) + ")"
+        description = " ".join(item.description.split())
+        if len(description) > limit:
+            description = description[:limit].rstrip() + "…"
+        lines.append(f"{item.id.kind} {item.id.name}{shown}" + (f": {description}" if description else ""))
+    return render.redact_secrets("\n".join(sorted(lines)), config.secrets)
 
 
 def _memory_target(file_path: Any, projects_name: str) -> Optional[tuple[str, str]]:
@@ -544,25 +726,61 @@ def _key_of_memory(item: ledger.ItemId) -> tuple[str, str]:
     return _target_key(folder, f"{item.name}{MARKDOWN_SUFFIX}")
 
 
-def sync_items(config: Config, as_of: datetime, scan: Optional[ScanResult] = None) -> dict[str, Any]:
-    """Create the ledger of each new item. Without a scan, a new memory's origin stays untraced."""
-    ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
-    items = inventory(config)
-    outcomes = {ledger.OUTCOME_CREATED: 0, ledger.OUTCOME_ORIGIN_FILLED: 0, ledger.OUTCOME_UNCHANGED: 0}
-    known = set()
-    for item in items:
-        known.add((item.id.scope, item.id.kind, item.id.name))
-        outcome = ledger.ensure_ledger(
-            ledgers_dir, item.id, item.founding, item.would_be_wrong, _origin_of(item, scan),
-            as_of.date().isoformat(),
-        )
-        outcomes[outcome] += 1
-    absent = [
-        document["identity"]
-        for document in ledger.iter_ledgers(ledgers_dir)
-        if (document["identity"]["scope"], document["identity"]["kind"], document["identity"]["name"]) not in known
+def _possible_renames(documents: Sequence[Mapping[str, Any]], is_absent: Any, as_of: datetime, config: Config) -> list[dict[str, str]]:
+    """Pairs that look like one item under a new name: a ledger holding entries whose item is gone,
+    and a recent empty ledger of the same scope and kind, with the same founding reason or much the
+    same name. This is a reading, so nothing moves. It stays listed for a set number of days."""
+    settings = config.ledger
+    gone = [document for document in documents if is_absent(document) and document["entries"]]
+    fresh = [
+        document for document in documents
+        if not is_absent(document) and not document["entries"]
+        and (as_of.date() - datetime.fromisoformat(document["created"]).date()).days <= settings.rename_flag_days
     ]
-    return {"items": len(items), **outcomes, "absent_from_inventory": absent}
+    found = []
+    for old in gone:
+        for new in fresh:
+            first, second = old["identity"], new["identity"]
+            if first["scope"] != second["scope"] or first["kind"] != second["kind"]:
+                continue
+            reason = old["founding"]["reason"]
+            if (reason is not None and reason == new["founding"]["reason"]) or weekly_notes.word_overlap(first["name"], second["name"]) >= settings.rename_name_overlap:
+                found.append({
+                    "what": f"{first['kind']} {first['name']} may now be {second['name']}",
+                    "detail": f"{len(old['entries'])} entries stay under the old name, and the new one starts empty. Only the old ledger file says so: merge them by hand if it is the same item.",
+                })
+    return found
+
+
+def sync_items(config: Config, as_of: datetime, scan: Optional[ScanResult] = None) -> dict[str, Any]:
+    """Create the ledger of each new item. Without a scan, a new memory's origin stays untraced.
+    What could not be read is listed in ``item_problems``, and the rest go on."""
+    ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
+    found = scan_inventory(config)
+    problems = list(found.problems)
+    outcomes = {ledger.OUTCOME_CREATED: 0, ledger.OUTCOME_ORIGIN_FILLED: 0, ledger.OUTCOME_UNCHANGED: 0, ledger.OUTCOME_CASE_RENAMED: 0}
+    for item in found.items:
+        try:
+            outcome = ledger.ensure_ledger(
+                ledgers_dir, item.id, item.founding, item.would_be_wrong, _origin_of(item, scan),
+                as_of.date().isoformat(),
+            )
+        except ledger.UNREADABLE as error:
+            problems.append({"what": f"{item.id.kind} {item.id.name}", "detail": f"{type(error).__name__}: {error}"})
+            continue
+        outcomes[outcome] += 1
+    documents = list(ledger.iter_ledgers(ledgers_dir, problems))
+
+    def is_absent(document: Mapping[str, Any]) -> bool:
+        return not found.could_be_there(document["identity"])
+
+    return {
+        "items": len(found.items),
+        **outcomes,
+        "absent_from_inventory": [document["identity"] for document in documents if is_absent(document)],
+        "possible_renames": _possible_renames(documents, is_absent, as_of, config),
+        "item_problems": ledger._distinct_problems(problems),
+    }
 
 
 def _set_below_normal_priority() -> None:
@@ -626,7 +844,7 @@ def run_backfill(config: Config, run_id: str, as_of: datetime) -> dict[str, Any]
     scan_seconds = time.monotonic() - scan_started
     synced = sync_items(config, as_of, scan)
     ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
-    notes = ledger.apply_notes(os.path.join(config.paths.data_dir, "notes"), ledgers_dir)
+    notes = ledger.apply_notes(os.path.join(config.paths.data_dir, "notes"), ledgers_dir, aliases=display_names(scan_inventory(config)))
     flags = ledger.write_flags(ledgers_dir, as_of, config.ledger)
     data_commit = memory_store.commit_all(config.paths.data_dir, config.memory, f"Ledger backfill {run_id}")
     return {

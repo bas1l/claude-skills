@@ -1,6 +1,10 @@
 """Counts by script."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
 from conftest import (
     assistant,
     attachment,
@@ -13,12 +17,13 @@ from conftest import (
 
 import counts
 import transcripts as t
+from config import load_config
 
 
 def count(tmp_path, config, main_records, subagent_records=()):
     main = write_jsonl(tmp_path / "main.jsonl", main_records)
     subs = [write_jsonl(tmp_path / "agent-1.jsonl", subagent_records)] if subagent_records else []
-    return counts.count_entries(t.iter_session_entries(main, subs, None, None), config.counts)
+    return counts.count_entries(t.iter_session_entries(main, subs, None, None), config.counts, config.secrets)
 
 
 def test_tool_calls_and_failures_are_counted_per_source(tmp_path, config):
@@ -41,6 +46,79 @@ def test_ids_and_numbers_group_in_a_signature(config):
     first = counts.error_signature("failed at line 12 for deadbeef01", config.counts)
     second = counts.error_signature("failed at line 99 for cafebabe02", config.counts)
     assert first == second
+
+
+STARTUP_LINE = "/c/Users/someone/.bashrc: line 1: /opt/conda/etc/profile.d/conda.sh: No such file or directory"
+
+
+def test_a_startup_line_does_not_hide_the_real_error(config):
+    first = counts.error_signature(f"{STARTUP_LINE}\nerror: pathspec 'x' did not match any file known to git", config.counts)
+    second = counts.error_signature(f"{STARTUP_LINE}\nTypeError: unsupported operand", config.counts)
+    assert first == "error: pathspec 'x' did not match any file known to git"
+    assert second == "TypeError: unsupported operand"
+    assert counts.error_signature("TypeError: unsupported operand", config.counts) == second
+
+
+def test_a_startup_line_after_the_exit_code_header_is_taken_out_too(config):
+    signature = counts.error_signature(f"Exit code 1\n{STARTUP_LINE}\nTypeError: unsupported operand", config.counts)
+    assert signature == "Exit code #\nTypeError: unsupported operand"
+
+
+def test_the_signature_holds_its_full_length_of_the_real_error(config):
+    real = "x" * 100
+    assert counts.error_signature(f"{STARTUP_LINE}\n{real}", config.counts) == "x" * config.counts.signature_chars
+
+
+def test_a_startup_line_does_not_decide_the_class(config):
+    text = f"{STARTUP_LINE}\nTypeError: unsupported operand"
+    assert counts.classify_error(STARTUP_LINE, config.counts) == "file missing"
+    assert counts.classify_error(text, config.counts) == "other"
+    assert counts.classify_error(f"{STARTUP_LINE}\nTraceback (most recent call last):", config.counts) == "python traceback"
+
+
+def test_an_error_with_only_startup_output_says_so(config):
+    signature = counts.error_signature(STARTUP_LINE, config.counts)
+    assert signature.startswith(counts.STARTUP_ONLY_LABEL)
+    assert "conda.sh" in signature
+
+
+@pytest.mark.parametrize("line", [
+    "/home/someone/.zshrc:12: command not found: nvm",
+    "/home/some one/.profile: line 3: oops: command not found",
+    "C:\\Users\\someone\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1:4 something failed",
+])
+def test_other_startup_files_match_the_rule(config, line):
+    assert counts.error_signature(f"{line}\nreal error", config.counts) == "real error"
+
+
+@pytest.mark.parametrize("text", [
+    "sed: /home/someone/.bashrc: No such file or directory",
+    "cat: .profile: Permission denied",
+    "",
+])
+def test_an_error_about_a_startup_file_itself_is_kept(config, text):
+    assert counts.error_signature(text, config.counts) == text
+
+
+def test_two_failures_behind_a_startup_line_count_apart(tmp_path, config):
+    records = [
+        tool_use("a", "Bash", {"command": "one"}),
+        tool_result("a", f"Exit code 1\n{STARTUP_LINE}\nfirst real error", is_error=True),
+        tool_use("b", "Bash", {"command": "two"}),
+        tool_result("b", f"Exit code 1\n{STARTUP_LINE}\nsecond real error", is_error=True),
+    ]
+    main = count(tmp_path, config, records)["main"]
+    assert sorted(item["signature"] for item in main["error_signatures"]) == ["Exit code #\nfirst real error", "Exit code #\nsecond real error"]
+    assert main["errors_by_class_hint"] == {"exit code": 2}
+
+
+def test_the_rule_is_a_required_setting(config, tmp_path):
+    raw = json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text(encoding="utf-8"))
+    del raw["counts"]["startup_noise_line_patterns"]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="startup_noise_line_patterns"):
+        load_config(str(path))
 
 
 def test_procedures_count_each_part_of_a_command_line():

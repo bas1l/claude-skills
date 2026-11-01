@@ -100,15 +100,63 @@ def synthetic_inventory(root: Path) -> dict[str, Any]:
     manifest.write_text('{"plugins": [], "mcpServers": []}', encoding="utf-8")
     user_config = root / "inventory" / "user_config.json"
     user_config.write_text("{}", encoding="utf-8")
+    installed = root / "inventory" / "installed_plugins.json"
+    installed.write_text('{"version": 2, "plugins": {}}', encoding="utf-8")
     return {
         "skills_dir": str(skills),
         "settings_file": str(settings),
         "optional_settings_files": [],
         "plugins_manifest": str(manifest),
         "user_config": str(user_config),
+        "installed_plugins_file": str(installed),
     }
 
 
 @pytest.fixture
 def config():
     return load_config()
+
+
+def stance_reply(stdin_text: str, refuse: Iterable[str] = (), answers: Any = None) -> str:
+    """A reply to the stance check: every stance is kept, except on an item whose name is in ``refuse``
+    (a for or against is refused), or in ``answers``, which maps a name to the fields to change. A
+    quote is taken to be about the item, unless the answer says otherwise."""
+    replies = []
+    for line in stdin_text.split("<stances>")[1].split("</stances>")[0].strip().splitlines():
+        stance = json.loads(line)
+        reply = {
+            "id": stance["id"], "verdict": "kept", "stance": stance["stance"], "quote_about_item": bool(stance["user_quote"]),
+            "rule_broken": False, "malfunction": False, "reason": "made up for a test",
+        }
+        if stance["name"] in tuple(refuse) and stance["stance"] != "no_bearing":
+            reply.update(verdict="refused", stance="no_bearing", quote_about_item=False)
+        reply.update((answers or {}).get(stance["name"], {}))
+        replies.append(reply)
+    return json.dumps({"verdicts": replies})
+
+
+def hold_all_stances(notes_dir: str) -> None:
+    """Record that every stance in these notes passed the stance check, for a test about something
+    else. The check itself has its own tests."""
+    import glob
+
+    for path in glob.glob(os.path.join(glob.escape(notes_dir), "*", "*", "chunk-*.json")):
+        with open(path, encoding="utf-8") as handle:
+            document = json.load(handle)
+        if document["notes_schema_version"] != 2:
+            continue
+        window = os.path.dirname(path)
+        checks_path = os.path.join(window, "stance-checks.json")
+        checks: dict[str, Any] = {}
+        if os.path.exists(checks_path):
+            with open(checks_path, encoding="utf-8") as handle:
+                checks = json.load(handle)["checks"]
+        for index, note in enumerate(document["notes"]):
+            for position, item in enumerate(note["items"]):
+                if isinstance(item, dict) and item.get("stance") in ("for", "against", "no_bearing"):
+                    checks.setdefault(f"{os.path.basename(path)}#{index}#{position}", {
+                        "stance": item["stance"], "final": item["stance"], "verdict": "kept", "quote_about_item": note["endorsement"] == "said",
+                        "rule_broken": False, "malfunction": False, "reason": "made up for a test", "item": {"scope": "", "kind": item["kind"], "name": item["name"]}, "what": note["what"], "run_id": "test",
+                    })
+        with open(checks_path, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": 3, "checks": checks}, handle)

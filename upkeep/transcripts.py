@@ -2,8 +2,9 @@
 
 The transcript format is undocumented and changes without notice, so everything this
 module does not recognise raises ``TranscriptFormatError``: an unknown record type,
-``origin.kind``, attachment type, system subtype, content block or denial kind stops
-the run and leaves the session unprocessed.
+``origin.kind``, attachment type, system subtype, content block or denial kind fails that
+session and leaves it unprocessed. Its id is reported and the run ends non-zero, while the
+other sessions go on.
 
 The six sender rules, each found in real data:
 
@@ -16,11 +17,18 @@ The six sender rules, each found in real data:
 5. Harness reminders inside a human record are stripped.
 6. Question answers and rejections inside tool results count as the user's
    (``USER_ANSWER``, ``USER_REJECTION``), as do the user's messages to teammates,
-   found only in subagent files (``USER_TO_TEAMMATE``).
+   found only in subagent files (``USER_TO_TEAMMATE``). An option label the user picked is
+   the model's wording, so it counts as accepting those words and never as saying them
+   (``USER_CHOSE_OPTION``). What the user typed beside a label stays ``USER_ANSWER``.
+
+A window is read by line, not by time, when it is given line limits. Queued messages are
+written after records stamped later than themselves, so a window limited by time would
+lose one written just after a read. See ``LineWindow``.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +37,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 USER_TYPED = "user_typed"
 USER_QUEUED = "user_queued"
 USER_ANSWER = "user_answer"
+USER_CHOSE_OPTION = "user_chose_option"
 USER_REJECTION = "user_rejection"
 USER_TO_TEAMMATE = "user_to_teammate"
 USER_PASTED = "user_pasted"
@@ -60,6 +69,9 @@ MODEL_USAGE = "model_usage"
 
 # The user's own words: the only kinds a quote may be verified against.
 USER_OWN_KINDS = frozenset({USER_TYPED, USER_QUEUED, USER_ANSWER, USER_REJECTION, USER_TO_TEAMMATE})
+# What can back ``accepted`` or ``relied_on`` but never ``said``: the user's reaction, in words
+# the model wrote.
+USER_REACTION_KINDS = USER_OWN_KINDS | {USER_CHOSE_OPTION}
 
 # Records that belong to the conversation. Everything else is bookkeeping.
 CONVERSATION_RECORD_TYPES = frozenset({"user", "assistant", "attachment", "system"})
@@ -67,7 +79,7 @@ BOOKKEEPING_RECORD_TYPES = frozenset({
     "agent-name", "agent-setting", "ai-title", "api-request", "api-request-blob", "api-request-shape",
     "artifact-autoreact-ledger", "artifact-comment-monitor", "atis-latch", "bridge-session",
     "continued-in", "cost-state", "custom-title", "file-history-delta", "file-history-snapshot",
-    "fork-context-ref", "frame-link", "last-prompt", "launched", "mode", "permission-mode",
+    "fork-context-ref", "frame-link", "last-prompt", "launched", "mode", "permission-mode", "pr-link",
     "queue-operation", "result", "started", "tools-used",
 })
 
@@ -80,7 +92,7 @@ ATTACHMENTS_IGNORED = frozenset({
     "invoked_skills", "max_turns_reached", "mcp_instructions_delta", "model", "nested_memory",
     "prompt_snapshot", "read_truncation_notice", "remote_session_change", "session_context",
     "session_cron_carry", "skill_listing", "skill_mention", "task_reminder", "team_context",
-    "thinking_drop", "total_tokens_reminder",
+    "thinking_drop", "total_tokens_reminder", "ultrathink_effort",
 })
 SYSTEM_SUBTYPES_READ = frozenset({
     "away_summary", "bridge_status", "compact_boundary", "informational", "local_command",
@@ -92,7 +104,9 @@ TOOL_RESULT_INNER_TYPES = frozenset({"text", "image", "tool_reference", "documen
 ASK_USER_TOOL = "AskUserQuestion"
 REJECTION_PREFIX = "The user doesn't want to proceed with this tool use."
 
-_PASTED_RE = re.compile(r"<pasted_content\b[^>]*>(.*?)(?:</pasted_content\b[^>]*>|\Z)", re.S)
+_PASTED_OPEN_RE = re.compile(r"<pasted_content\b([^>]*)>")
+_PASTED_ID_RE = re.compile(r'\bid="([^"]*)"')
+_PASTED_ANY_CLOSE_RE = re.compile(r"</pasted_content\b[^>]*>")
 _HARNESS_TEXT_RE = re.compile(
     r"<(system-reminder|local-command-caveat|local-command-stdout|bash-stdout|bash-stderr)>.*?</\1>", re.S
 )
@@ -134,14 +148,17 @@ def parse_timestamp(value: str) -> datetime:
     return parsed
 
 
-def iter_records(path: str) -> Iterator[tuple[int, Mapping[str, Any]]]:
-    """Yield ``(line_number, record)``.
+def iter_records(path: str, through_line: Optional[int] = None) -> Iterator[tuple[int, Mapping[str, Any]]]:
+    """Yield ``(line_number, record)``, up to ``through_line`` if given.
 
     A final line with no newline is a record still being written by a live session,
-    and is left for the next run. Any other unparsable line raises.
+    and is left for the next run. Any other unparsable line raises. A line past ``through_line``
+    is not looked at, so a format change after a window cannot stop a read of that window.
     """
     with open(path, encoding="utf-8", newline="\n") as handle:
         for line_number, line in enumerate(handle, 1):
+            if through_line is not None and line_number > through_line:
+                return
             if not line.endswith("\n"):
                 return
             if not line.strip():
@@ -194,16 +211,47 @@ def _text_of_tool_result(block: Mapping[str, Any], where: str) -> str:
     return "\n".join(parts)
 
 
+def _end_of_paste(text: str, attributes: str, start: int) -> tuple[int, int]:
+    """Where a paste's content ends and what follows it begins. Only a closing tag with the
+    opening tag's id ends a paste, since the pasted text can hold a literal closing tag. A paste
+    never closed runs to the end, and one with no id to its last closing tag: when in doubt, text
+    stays labelled as pasted, which can lose the user's words but never credits them with others'."""
+    identity = _PASTED_ID_RE.search(attributes)
+    if identity is not None:
+        closing = re.compile(rf'</pasted_content\s+id="{re.escape(identity.group(1))}"\s*>').search(text, start)
+        return (closing.start(), closing.end()) if closing is not None else (len(text), len(text))
+    last = None
+    for last in _PASTED_ANY_CLOSE_RE.finditer(text, start):
+        pass
+    return (last.start(), last.end()) if last is not None else (len(text), len(text))
+
+
 def split_pasted(text: str) -> list[tuple[bool, str]]:
     """Split a user message into ``(is_pasted, part)`` pairs, stripped, dropping empty parts."""
     parts: list[tuple[bool, str]] = []
     position = 0
-    for match in _PASTED_RE.finditer(text):
-        parts.append((False, text[position:match.start()]))
-        parts.append((True, match.group(1)))
-        position = match.end()
-    parts.append((False, text[position:]))
+    while True:
+        opening = _PASTED_OPEN_RE.search(text, position)
+        if opening is None:
+            parts.append((False, text[position:]))
+            break
+        parts.append((False, text[position:opening.start()]))
+        end, position = _end_of_paste(text, opening.group(1), opening.end())
+        parts.append((True, text[opening.end():end]))
     return [(pasted, part.strip()) for pasted, part in parts if part.strip()]
+
+
+def split_answer(answer: str, labels: Iterable[str]) -> tuple[list[str], str]:
+    """(labels picked, what is left, which the user typed). A label counts as a whole phrase, so
+    the option "No" is not found in "Now". Longest first, since one label can hold another."""
+    chosen = []
+    remainder = answer
+    for label in sorted(labels, key=len, reverse=True):
+        found = re.search(rf"(?<!\w){re.escape(label)}(?!\w)", remainder)
+        if label.strip() and found is not None:
+            chosen.append(label)
+            remainder = remainder[:found.start()] + " " + remainder[found.end():]
+    return chosen, remainder.strip(" ,;\n\t")
 
 
 def _strip_harness_text(text: str) -> str:
@@ -330,12 +378,12 @@ class _FileClassifier:
             if block_type == "text":
                 entries.append(self._entry(record, SYSTEM_TEXT, _require(block, "text", where), where))
             elif block_type == "tool_result":
-                entries.append(self._tool_result(record, block, denial_kind, where))
+                entries.extend(self._tool_result(record, block, denial_kind, where))
             else:
                 raise TranscriptFormatError(f"{where}: unknown block {block_type!r} beside a tool result")
         return entries
 
-    def _tool_result(self, record: Mapping[str, Any], block: Mapping[str, Any], denial_kind: str, where: str) -> Entry:
+    def _tool_result(self, record: Mapping[str, Any], block: Mapping[str, Any], denial_kind: str, where: str) -> list[Entry]:
         tool_use_id = _require(block, "tool_use_id", where)
         if tool_use_id not in self._tool_names:
             raise TranscriptFormatError(f"{where}: tool result for an unseen tool call")
@@ -345,26 +393,32 @@ class _FileClassifier:
         if denial_kind == "user-rejected":
             if not text.startswith(REJECTION_PREFIX):
                 raise TranscriptFormatError(f"{where}: user rejection with an unknown shape")
-            return self._entry(record, USER_REJECTION, f"[rejected the {tool_name} call]", where, **fields)
+            return [self._entry(record, USER_REJECTION, f"[rejected the {tool_name} call]", where, **fields)]
         if denial_kind:
-            return self._entry(record, TOOL_DENIED, text, where, **fields)
+            return [self._entry(record, TOOL_DENIED, text, where, **fields)]
         if block.get("is_error"):
-            return self._entry(record, TOOL_ERROR, text, where, **fields)
+            return [self._entry(record, TOOL_ERROR, text, where, **fields)]
         if tool_name == ASK_USER_TOOL:
-            return self._question_answer(record, fields, where)
-        return self._entry(record, TOOL_RESULT, text, where, **fields)
+            return self._question_answers(record, fields, where)
+        return [self._entry(record, TOOL_RESULT, text, where, **fields)]
 
-    def _question_answer(self, record: Mapping[str, Any], fields: Mapping[str, Any], where: str) -> Entry:
+    def _question_answers(self, record: Mapping[str, Any], fields: Mapping[str, Any], where: str) -> list[Entry]:
+        """Each answer, split into the labels the model wrote and the words the user typed."""
         result = _require(record, "toolUseResult", where)
         answers = _require(result, "answers", where)
-        return self._entry(
-            record,
-            USER_ANSWER,
-            "\n".join(str(answer) for answer in answers.values()),
-            where,
-            context="\n".join(str(question) for question in answers),
-            **fields,
-        )
+        questions = _require(result, "questions", where)
+        labels_of = {_require(question, "question", where): [_require(option, "label", where) for option in _require(question, "options", where)] for question in questions}
+        annotations = result.get("annotations") or {}
+        entries = []
+        for question, answer in answers.items():
+            chosen, typed = split_answer(str(answer), labels_of.get(question, ()))
+            if chosen:
+                entries.append(self._entry(record, USER_CHOSE_OPTION, "\n".join(chosen), where, context=str(question), **fields))
+            note = annotations.get(question, {}).get("notes", "")
+            for own in (typed, note):
+                if own.strip():
+                    entries.append(self._entry(record, USER_ANSWER, own.strip(), where, context=str(question), **fields))
+        return entries
 
     # --- assistant records ---------------------------------------------------------
 
@@ -484,6 +538,26 @@ class _FileClassifier:
         raise TranscriptFormatError(f"{where}: unknown system subtype {subtype!r}")
 
 
+@dataclass(frozen=True)
+class LineWindow:
+    """A window by line: for each file, keyed by ``file_key``, the lines already read and the last
+    line of this window. A file with no entry counts as none read, or as not in this window.
+
+    Each line is read once, whatever its timestamp, so a record written late is still read, and
+    two records in one millisecond are both read. ``floor`` keeps the forward-only start date,
+    because a session's first window starts at line 0.
+    """
+
+    after: Mapping[str, int]
+    through: Mapping[str, int]
+    floor: Optional[datetime]
+
+
+def file_key(path: str, main_path: str) -> str:
+    """A file's name in a window: relative to the main file's folder, with forward slashes."""
+    return os.path.relpath(path, os.path.dirname(main_path)).replace(os.sep, "/")
+
+
 def iter_file_entries(
     path: str,
     source: str,
@@ -512,18 +586,66 @@ def iter_file_entries(
         yield from classifier.classify(record, line_number)
 
 
+def uuids_read_before(path: str, lines_read: int) -> Iterator[str]:
+    """The uuid of each conversation record at or before a line. Raises if the file is shorter."""
+    last = 0
+    for last, record in iter_records(path, lines_read):
+        if record["type"] in CONVERSATION_RECORD_TYPES:
+            yield _require(record, "uuid", f"{path}:{last}")
+    if last < lines_read:
+        raise TranscriptFormatError(f"{path}: the transcript shrank: {lines_read} lines were read and it now has {last}")
+
+
+def _new_records(
+    path: str, key: str, window: LineWindow, seen_uuids: set[str], classifier: Optional[_FileClassifier] = None
+) -> Iterator[tuple[int, Mapping[str, Any]]]:
+    """The conversation records of one file that this window adds. Lines before it still tell the
+    classifier which tool each result belongs to."""
+    lines_after = window.after.get(key, 0)
+    lines_through = window.through.get(key, 0)
+    for line_number, record in iter_records(path, lines_through):
+        if record["type"] not in CONVERSATION_RECORD_TYPES:
+            continue
+        if classifier is not None:
+            classifier.note_tool_uses(record)
+        if line_number <= lines_after:
+            continue
+        where = f"{path}:{line_number}"
+        if window.floor is not None and parse_timestamp(_require(record, "timestamp", where)) <= window.floor:
+            continue
+        uuid = _require(record, "uuid", where)
+        if uuid not in seen_uuids:
+            seen_uuids.add(uuid)
+            yield line_number, record
+
+
+def any_new_record(path: str, key: str, window: LineWindow, seen_uuids: set[str]) -> bool:
+    return next(_new_records(path, key, window, seen_uuids), None) is not None
+
+
 def iter_session_entries(
     main_path: str,
     subagent_paths: Iterable[str],
     after: Optional[datetime],
     through: Optional[datetime],
+    lines: Optional[LineWindow] = None,
 ) -> Iterator[Entry]:
     """Yield a session's entries: the main file first, then each subagent file.
 
     Subagent files can repeat records copied from the main conversation, so a uuid
-    seen once is not yielded again.
+    seen once is not yielded again. With ``lines`` the window is by line and ``after`` and
+    ``through`` are ignored: everything read in earlier windows counts as seen, so that a subagent
+    file written later cannot bring old copies back.
     """
     seen_uuids: set[str] = set()
-    yield from iter_file_entries(main_path, "main", after, through, seen_uuids)
-    for path in subagent_paths:
-        yield from iter_file_entries(path, "subagent", after, through, seen_uuids)
+    paths = [(main_path, "main"), *((path, "subagent") for path in subagent_paths)]
+    if lines is None:
+        for path, source in paths:
+            yield from iter_file_entries(path, source, after, through, seen_uuids)
+        return
+    for path, _ in paths:
+        seen_uuids.update(uuids_read_before(path, lines.after.get(file_key(path, main_path), 0)))
+    for path, source in paths:
+        classifier = _FileClassifier(path, source)
+        for line_number, record in _new_records(path, file_key(path, main_path), lines, seen_uuids, classifier):
+            yield from classifier.classify(record, line_number)

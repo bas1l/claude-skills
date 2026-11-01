@@ -455,12 +455,12 @@ def test_rotation_keeps_to_the_budget_and_covers_every_skill_over_time(tree):
     months = ["2030-01", "2030-02", "2030-03"]
     seen = []
     for month in months:
-        chosen = monthly.choose_skills(names, checked, 2)
+        chosen = monthly.choose_skills(names, checked, 2, month)
         assert len(chosen) == 2
         seen.extend(chosen)
         checked.update(dict.fromkeys(chosen, month))
     assert set(seen) == set(names)
-    assert monthly.choose_skills(names, checked, 2)[0] == "b"
+    assert monthly.choose_skills(names, checked, 2, "2030-04")[0] == "b"
 
 
 def test_the_pass_researches_only_its_budget_and_remembers_what_it_checked(tree):

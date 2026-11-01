@@ -1,7 +1,7 @@
 """Tool-limited internet research for a generic description of a need.
 
-The description is checked for private material before anything is sent, and the queries the
-model actually ran are checked after. What was searched comes from the record of the run, not
+The description is checked for private material before anything is sent, and the queries and
+fetched links the model actually used are checked after. What was searched comes from the record of the run, not
 from the model's account, and each link must appear in what the tools returned.
 
 Outcomes:
@@ -20,6 +20,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from urllib.parse import unquote, urlsplit
 
 import model_call
 import schemas
@@ -84,12 +85,17 @@ def build_private_material(terms: Iterable[str], texts: Iterable[str], shingle_w
     return PrivateMaterial(tuple(sorted({term for term in terms if term.strip()})), frozenset(shingles), shingle_words)
 
 
+def _term_findings(text: str, private: PrivateMaterial) -> list[str]:
+    lowered = text.lower()
+    if any(re.search(rf"(?<![\w-]){re.escape(term.lower())}(?![\w-])", lowered) for term in private.terms):
+        return ["private term"]
+    return []
+
+
 def private_findings(text: str, private: PrivateMaterial) -> list[str]:
     """What is wrong with this text, naming the kind of material and not the material."""
     found = [name for name, pattern in _PATTERNS if pattern.search(text)]
-    lowered = text.lower()
-    if any(re.search(rf"(?<![\w-]){re.escape(term.lower())}(?![\w-])", lowered) for term in private.terms):
-        found.append("private term")
+    found.extend(_term_findings(text, private))
     words = _words(text)
     size = private.shingle_words
     if any(tuple(words[start:start + size]) in private.shingles for start in range(len(words) - size + 1)):
@@ -104,6 +110,41 @@ def check_description(description: str, private: PrivateMaterial, max_chars: int
     findings = private_findings(description, private)
     if findings:
         raise PrivateMaterialError(f"description refused: {', '.join(findings)}")
+
+
+def _host_is_private(host: str) -> bool:
+    return (
+        host == "localhost" or ":" in host or _IP_RE.fullmatch(host) is not None or _LOCAL_HOST_RE.fullmatch(host) is not None
+    )
+
+
+def check_fetched_urls(
+    activity: Sequence[model_call.ToolActivity], private: PrivateMaterial, public_fragments: Iterable[str]
+) -> None:
+    """Raise if a fetched link could carry private material out, or reach a private machine.
+
+    A private host is refused always. The rest of a link is checked only if the model wrote it: a
+    link that an earlier search or fetch returned came from the web and carries nothing of the
+    user's, and such links often hold ids and common words that the checks would take for private.
+    The host of a link is checked for private terms only, since a public site's name can hold
+    ``.claude``. A path's leading slash goes, since a site's ``/home`` is not a folder of this PC.
+    """
+    returned: set[str] = set()
+    for item in activity:
+        if item.name == WEB_FETCH:
+            url = str(item.input["url"])
+            parts = urlsplit(url)
+            host = (parts.hostname or "").lower()
+            findings = ["private host"] if _host_is_private(host) else []
+            if _normal_url(url) not in returned:
+                rest = unquote(f"{parts.path.lstrip('/')} {parts.query}")
+                for fragment in public_fragments:
+                    rest = rest.replace(fragment, " ")
+                findings.extend(_term_findings(host, private))
+                findings.extend(private_findings(rest, private))
+            if findings:
+                raise PrivateMaterialError(f"a link the model fetched held private material ({', '.join(findings)})")
+        returned.update(_normal_url(url) for url in _URL_RE.findall(item.result_text))
 
 
 def _searches_of(activity: Sequence[model_call.ToolActivity]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -163,6 +204,7 @@ def research_description(
         chunking_config=config.chunking,
         usage_log_path=usage_log_path,
     )
+    check_fetched_urls(result.tool_activity, private, config.research.public_path_fragments)
     searches, fetches = _searches_of(result.tool_activity)
     for search in searches:
         # The model may look up the product's own documented folders. The rest is held to the rule.

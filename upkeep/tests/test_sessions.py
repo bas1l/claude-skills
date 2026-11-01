@@ -13,6 +13,12 @@ from config import SessionsConfig
 START = t.parse_timestamp("2030-01-01T10:10:00Z")
 
 
+def select(files, state, config):
+    work, failures = sessions.select_work(files, state, config)
+    assert failures == []
+    return work
+
+
 def session_config(excluded=(), count_only=()):
     return SessionsConfig(start_date=START, excluded_cwd_prefixes=tuple(excluded), excluded_cwd_globs=(), count_only_cwd_prefixes=tuple(count_only))
 
@@ -31,7 +37,7 @@ def make_session(root, minutes, folder="F--project", session_id=SESSION_ID, cwd=
 
 def test_new_session_is_selected_from_the_start_date(tmp_path):
     files = make_session(tmp_path, [5, 15, 20])
-    item, = sessions.select_work(files, sessions.new_state(), session_config())
+    item, = select(files, sessions.new_state(), session_config())
     assert item.after == START
     assert item.through == t.parse_timestamp(stamp(20))
     assert item.mode == sessions.MODE_READ
@@ -40,27 +46,27 @@ def test_new_session_is_selected_from_the_start_date(tmp_path):
 
 def test_session_older_than_the_start_date_is_not_selected(tmp_path):
     files = make_session(tmp_path, [1, 2])
-    assert sessions.select_work(files, sessions.new_state(), session_config()) == []
+    assert select(files, sessions.new_state(), session_config()) == []
 
 
 def test_processed_session_with_nothing_new_is_skipped(tmp_path):
     files = make_session(tmp_path, [15])
     state = sessions.new_state()
-    item, = sessions.select_work(files, state, session_config())
+    item, = select(files, state, session_config())
     sessions.pin_window(state, item)
     sessions.mark_processed(state, item)
-    assert sessions.select_work(files, state, session_config()) == []
+    assert select(files, state, session_config()) == []
 
 
 def test_grown_session_is_selected_from_the_recorded_timestamp(tmp_path):
     files = make_session(tmp_path, [15])
     state = sessions.new_state()
-    item, = sessions.select_work(files, state, session_config())
+    item, = select(files, state, session_config())
     sessions.pin_window(state, item)
     sessions.mark_processed(state, item)
 
     files = make_session(tmp_path, [15, 25])
-    grown, = sessions.select_work(files, state, session_config())
+    grown, = select(files, state, session_config())
     assert grown.after == t.parse_timestamp(stamp(15))
     assert grown.through == t.parse_timestamp(stamp(25))
 
@@ -68,18 +74,18 @@ def test_grown_session_is_selected_from_the_recorded_timestamp(tmp_path):
 def test_interrupted_session_resumes_the_pinned_window(tmp_path):
     files = make_session(tmp_path, [15])
     state = sessions.new_state()
-    item, = sessions.select_work(files, state, session_config())
+    item, = select(files, state, session_config())
     sessions.pin_window(state, item)
 
     files = make_session(tmp_path, [15, 40])
-    resumed, = sessions.select_work(files, state, session_config())
+    resumed, = select(files, state, session_config())
     assert resumed.resumed
     assert (resumed.after, resumed.through) == (item.after, item.through)
 
 
 def test_mark_processed_needs_a_pinned_window(tmp_path):
     files = make_session(tmp_path, [15])
-    item, = sessions.select_work(files, sessions.new_state(), session_config())
+    item, = select(files, sessions.new_state(), session_config())
     with pytest.raises(ValueError, match="never pinned"):
         sessions.mark_processed(sessions.new_state(), item)
 
@@ -87,27 +93,27 @@ def test_mark_processed_needs_a_pinned_window(tmp_path):
 def test_excluded_folder_is_skipped_by_its_records_cwd(tmp_path):
     excluded = os.path.normpath("/home/x/.claude/upkeep")
     files = make_session(tmp_path, [15], cwd=os.path.join(excluded, "run"))
-    assert sessions.select_work(files, sessions.new_state(), session_config(excluded=[excluded])) == []
+    assert select(files, sessions.new_state(), session_config(excluded=[excluded])) == []
 
 
 def test_excluded_prefix_stops_at_a_path_boundary(tmp_path):
     excluded = os.path.normpath("/home/x/.claude/upkeep")
     files = make_session(tmp_path, [15], cwd=excluded + "-other")
-    item, = sessions.select_work(files, sessions.new_state(), session_config(excluded=[excluded]))
+    item, = select(files, sessions.new_state(), session_config(excluded=[excluded]))
     assert item.mode == sessions.MODE_READ
 
 
 def test_count_only_folder_is_counted_and_not_read(tmp_path):
     brief = os.path.normpath("/home/x/.claude/brief")
     files = make_session(tmp_path, [15], cwd=brief)
-    item, = sessions.select_work(files, sessions.new_state(), session_config(count_only=[brief]))
+    item, = select(files, sessions.new_state(), session_config(count_only=[brief]))
     assert item.mode == sessions.MODE_COUNT_ONLY
 
 
 def test_project_comes_from_the_record_and_not_the_folder_name(tmp_path):
     real = os.path.normpath("/work/some_name/app")
     files = make_session(tmp_path, [15], folder="F--work-some-name-app", cwd=real)
-    item, = sessions.select_work(files, sessions.new_state(), session_config())
+    item, = select(files, sessions.new_state(), session_config())
     assert item.project_cwd == real
 
 
@@ -115,7 +121,7 @@ def test_same_id_in_two_folders_is_tracked_apart(tmp_path):
     make_session(tmp_path, [15], folder="F--one")
     files = make_session(tmp_path, [15], folder="F--two")
     assert len(files) == 2
-    assert len(sessions.select_work(files, sessions.new_state(), session_config())) == 2
+    assert len(select(files, sessions.new_state(), session_config())) == 2
     assert files[0].state_key != files[1].state_key
 
 

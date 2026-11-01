@@ -7,13 +7,28 @@ one path has appeared under two spellings.
 
 State file shape:
 
-    {"schema_version": 1,
+    {"schema_version": 2,
      "sessions": {"<folder>/<id>": {"processed_through": "<iso>",
+                                    "lines_read": {"<file>": <last line read>},
                                     "pending": {"after": "<iso>", "through": "<iso>",
+                                                "lines_after": {...}, "lines_through": {...},
+                                                "floor": "<iso>",
                                                 "mode": "read", "project_cwd": "<path>"}}}}
 
 ``pending`` pins an open window, so an interrupted run resumes the same window instead
 of computing a new one. It is cleared when the window completes.
+
+A window is limited by line and not by time, because records are not written in time order: a
+queued message is written after records stamped later than itself. ``after`` and ``through`` remain
+what they were for the notes: the newest stamp read before the window and at its end. A session
+whose records are only late ones has ``through == after``.
+
+Carrying over schema version 1, which held timestamps only. For each file, the lines read are the
+run of lines from the start with stamps at or before ``processed_through``. Any line after that run
+was certainly written after that read, because every record then on disk was stamped at or before it.
+A late record inside that run cannot be told apart, and counts as read, as it did before. A pinned
+window is carried over the same way, at both ends; if that changes what it holds, its chunks no longer
+match and it is read again by the existing reset.
 
 State is keyed by project folder and id because one session id can exist in two project
 folders, as an identical copy or as two different lengths. Each file is tracked on its
@@ -34,7 +49,8 @@ from typing import Any, Mapping, Optional
 import transcripts
 from config import SessionsConfig
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
+OLD_STATE_SCHEMA_VERSION = 1
 MODE_READ = "read"
 MODE_COUNT_ONLY = "count_only"
 
@@ -59,6 +75,14 @@ class SessionSpan:
 
 
 @dataclass(frozen=True)
+class SessionFailure:
+    """A session that could not be read. It fails alone, and the others go on."""
+
+    state_key: str
+    error: str
+
+
+@dataclass(frozen=True)
 class WorkItem:
     """One session and the window ``after < timestamp <= through`` to process."""
 
@@ -68,6 +92,7 @@ class WorkItem:
     mode: str
     project_cwd: str
     resumed: bool
+    lines: Optional[transcripts.LineWindow] = None
 
 
 def discover_sessions(projects_dir: str) -> list[SessionFiles]:
@@ -128,6 +153,59 @@ def read_span(files: SessionFiles) -> Optional[SessionSpan]:
     return SessionSpan(first=first, last=last, cwd_counts=dict(cwd_counts))
 
 
+def _key_of(path: str, files: SessionFiles) -> str:
+    return transcripts.file_key(path, files.main_path)
+
+
+def count_lines(files: SessionFiles) -> dict[str, int]:
+    """The last whole line of each of a session's files."""
+    found = {}
+    for path in _all_paths(files):
+        last = 0
+        for last, _ in transcripts.iter_records(path):
+            pass
+        found[_key_of(path, files)] = last
+    return found
+
+
+def lines_stamped_through(files: SessionFiles, moment: datetime) -> dict[str, int]:
+    """For each file, the last line of the run from the start with stamps at or before ``moment``."""
+    found = {}
+    for path in _all_paths(files):
+        reached = 0
+        for line_number, record in transcripts.iter_records(path):
+            if record["type"] in transcripts.CONVERSATION_RECORD_TYPES:
+                if transcripts.parse_timestamp(record["timestamp"]) > moment:
+                    break
+            reached = line_number
+        found[_key_of(path, files)] = reached
+    return found
+
+
+def _has_new_record(files: SessionFiles, lines_read: Mapping[str, int], lines_now: Mapping[str, int], floor: datetime) -> bool:
+    """True if a line not read yet holds a conversation record not seen before, past the start date."""
+    window = transcripts.LineWindow(lines_read, lines_now, floor)
+    seen: set[str] = set()
+    for path in _all_paths(files):
+        seen.update(transcripts.uuids_read_before(path, lines_read.get(_key_of(path, files), 0)))
+    for path in _all_paths(files):
+        if transcripts.any_new_record(path, _key_of(path, files), window, seen):
+            return True
+    return False
+
+
+def migrate_entry(files: SessionFiles, entry: dict[str, Any], floor: datetime) -> None:
+    """Bring one session's state from timestamps to lines. See the module docstring."""
+    processed = entry.get("processed_through")
+    if processed is not None and "lines_read" not in entry:
+        entry["lines_read"] = lines_stamped_through(files, datetime.fromisoformat(processed))
+    pending = entry.get("pending")
+    if pending is not None and "lines_through" not in pending:
+        pending["lines_after"] = lines_stamped_through(files, datetime.fromisoformat(pending["after"]))
+        pending["lines_through"] = lines_stamped_through(files, datetime.fromisoformat(pending["through"]))
+        pending["floor"] = floor.isoformat()
+
+
 def _is_under(path: str, prefix: str) -> bool:
     normal_path = os.path.normcase(os.path.normpath(path))
     normal_prefix = os.path.normcase(os.path.normpath(prefix))
@@ -159,50 +237,70 @@ def project_of_cwds(cwds: Mapping[str, int]) -> str:
     return min(cwds, key=lambda cwd: (-cwds[cwd], cwd))
 
 
-def select_work(files_list: list[SessionFiles], state: Mapping[str, Any], config: SessionsConfig) -> list[WorkItem]:
-    """Choose sessions with unprocessed records after the forward-only start date.
+def _pinned_item(files: SessionFiles, pending: Mapping[str, Any]) -> WorkItem:
+    return WorkItem(
+        files=files,
+        after=datetime.fromisoformat(pending["after"]),
+        through=datetime.fromisoformat(pending["through"]),
+        mode=pending["mode"],
+        project_cwd=pending["project_cwd"],
+        resumed=True,
+        lines=transcripts.LineWindow(pending["lines_after"], pending["lines_through"], datetime.fromisoformat(pending["floor"])),
+    )
 
-    A session with a pinned window is returned first with that window. A session with
-    nothing new since its recorded timestamp is skipped.
-    """
+
+def _new_item(files: SessionFiles, entry: Mapping[str, Any], config: SessionsConfig) -> Optional[WorkItem]:
+    processed = entry.get("processed_through")
+    after = datetime.fromisoformat(processed) if processed is not None else config.start_date
+    # A late record has a stamp at or before ``after``, but the file changed after the last read,
+    # which was at or after ``after``. Hence strictly before.
+    if newest_change(files) < after:
+        return None
+    lines_read = entry.get("lines_read", {})
+    lines_now = count_lines(files)
+    for key, count in lines_read.items():
+        if lines_now.get(key, 0) < count:
+            raise transcripts.TranscriptFormatError(f"{files.state_key}: {key} shrank: {count} lines were read and it now has {lines_now.get(key, 0)}")
+    if lines_now == lines_read or not _has_new_record(files, lines_read, lines_now, config.start_date):
+        return None
+    span = read_span(files)
+    if span is None:
+        return None
+    mode = mode_of_cwds(span.cwd_counts, config)
+    if mode is None:
+        return None
+    return WorkItem(
+        files=files,
+        after=after,
+        through=max(after, span.last),
+        mode=mode,
+        project_cwd=project_of_cwds(span.cwd_counts),
+        resumed=False,
+        lines=transcripts.LineWindow(lines_read, lines_now, config.start_date),
+    )
+
+
+def select_work(
+    files_list: list[SessionFiles], state: dict[str, Any], config: SessionsConfig
+) -> tuple[list[WorkItem], list[SessionFailure]]:
+    """Choose sessions with unread records after the forward-only start date, and those that could
+    not be read. A session with a pinned window comes with that window. Old state is carried over
+    here, in ``state``, and the caller saves it."""
     known = state["sessions"]
     work: list[WorkItem] = []
+    failures: list[SessionFailure] = []
     for files in files_list:
-        entry = known.get(files.state_key, {})
-        pending = entry.get("pending")
-        if pending is not None:
-            work.append(
-                WorkItem(
-                    files=files,
-                    after=datetime.fromisoformat(pending["after"]),
-                    through=datetime.fromisoformat(pending["through"]),
-                    mode=pending["mode"],
-                    project_cwd=pending["project_cwd"],
-                    resumed=True,
-                )
-            )
+        try:
+            entry = known.get(files.state_key, {})
+            migrate_entry(files, entry, config.start_date)
+            pending = entry.get("pending")
+            item = _pinned_item(files, pending) if pending is not None else _new_item(files, entry, config)
+        except transcripts.TranscriptFormatError as error:
+            failures.append(SessionFailure(files.state_key, f"{type(error).__name__}: {error}"))
             continue
-        processed = entry.get("processed_through")
-        after = datetime.fromisoformat(processed) if processed is not None else config.start_date
-        if newest_change(files) <= after:
-            continue
-        span = read_span(files)
-        if span is None or span.last <= after:
-            continue
-        mode = mode_of_cwds(span.cwd_counts, config)
-        if mode is None:
-            continue
-        work.append(
-            WorkItem(
-                files=files,
-                after=after,
-                through=span.last,
-                mode=mode,
-                project_cwd=project_of_cwds(span.cwd_counts),
-                resumed=False,
-            )
-        )
-    return work
+        if item is not None:
+            work.append(item)
+    return work, failures
 
 
 def new_state() -> dict[str, Any]:
@@ -213,9 +311,10 @@ def load_state(path: str) -> dict[str, Any]:
     """Read the state file. A missing file raises; the first run creates it explicitly."""
     with open(path, encoding="utf-8") as handle:
         state = json.load(handle)
-    if state.get("schema_version") != STATE_SCHEMA_VERSION:
+    if state.get("schema_version") not in (OLD_STATE_SCHEMA_VERSION, STATE_SCHEMA_VERSION):
         raise ValueError(f"state file {path}: schema_version {state.get('schema_version')!r}")
-    return state
+    # Each entry is carried over when ``select_work`` next reaches it, since that needs its files.
+    return {**state, "schema_version": STATE_SCHEMA_VERSION}
 
 
 def save_state(path: str, state: Mapping[str, Any]) -> None:
@@ -230,9 +329,14 @@ def save_state(path: str, state: Mapping[str, Any]) -> None:
 
 def pin_window(state: dict[str, Any], item: WorkItem) -> None:
     """Record the window being processed, so a rerun after an interruption reuses it."""
+    if item.lines is None or item.lines.floor is None:
+        raise ValueError(f"session {item.files.state_key}: a window to pin must be limited by line, with a floor")
     state["sessions"].setdefault(item.files.state_key, {})["pending"] = {
         "after": item.after.isoformat(),
         "through": item.through.isoformat(),
+        "lines_after": dict(item.lines.after),
+        "lines_through": dict(item.lines.through),
+        "floor": item.lines.floor.isoformat(),
         "mode": item.mode,
         "project_cwd": item.project_cwd,
     }
@@ -244,4 +348,5 @@ def mark_processed(state: dict[str, Any], item: WorkItem) -> None:
     if entry.get("pending") is None:
         raise ValueError(f"session {item.files.state_key}: marking a window that was never pinned")
     entry["processed_through"] = item.through.isoformat()
+    entry["lines_read"] = dict(entry["pending"]["lines_through"])
     entry["pending"] = None

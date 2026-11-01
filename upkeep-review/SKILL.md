@@ -28,7 +28,15 @@ $py = (Get-Content "$HOME\.claude\upkeep\local.json" -Raw | ConvertFrom-Json).py
 
 Every result is JSON. Exit code 2 means refused: the reason is on stderr and nothing was changed, so tell him the reason in plain words. Any other failure is a fault: report it, and do not work around it.
 
-Actions that write need `--review <review_id>`, from `show`. `undo` and `reject` also need `--session ${CLAUDE_SESSION_ID}`.
+Actions that write need `--review <review_id>`, from `show`, and `--session ${CLAUDE_SESSION_ID}`. The page shows the same id as its page version.
+
+## If the numbers changed
+
+A number means something only on the page Basil read it from, and that page may be open in a browser while a pass builds a new review. A session stays on the page version of its first action. If an action is refused because the session took its numbers from another version:
+
+1. Do not carry out the number he typed, under any item. Reading the review again does not make it safe, and the script keeps refusing.
+2. Tell him the numbers may mean other items now, and ask him to reload the page and say when it shows the new version.
+3. Only after he says so, in this session, run `read-again --review R --session S`. Then ask which numbers he wants, from the page in front of him.
 
 ## Start
 
@@ -44,8 +52,8 @@ He may name several at once, such as "undo 1, approve 2, why 3?". Do them in the
 |---|---|---|
 | `undo N` | `undo N --review R --session S` | Restores the memory by a new commit, which keeps history. Adds an entry against, and a decision that stops it being proposed again. On a trial-run item there is nothing to restore, so it only records that |
 | `reject N` | `reject N --review R --session S` | Nothing changes. Adds the same records |
-| `keep N` | `keep N --review R` | An applied change stays and stops carrying forward |
-| `skip N` | `skip N --review R` | Stays open and carries forward with its original week |
+| `keep N` | `keep N --review R --session S` | An applied change stays and stops carrying forward |
+| `skip N` | `skip N --review R --session S` | Stays open and carries forward with its original week |
 | `why N` | see below | Explains; changes nothing |
 | `approve N` | by kind, below | Depends on the kind |
 
@@ -60,7 +68,7 @@ The item's `record.kind` says which. Read it with `item N` first.
 **`skill`**
 1. Run `check-draft N`, and read the draft in its result yourself as well, looking for anything private the patterns miss: names of people, projects, paths, servers, or wording lifted from a memory or transcript.
 2. If anything looks private, show him where and edit the draft file named in the result, removing it. The script also refuses a draft whose checks fail. Pass `--folder name` if the item names no target; ask him for the name.
-3. Run `approve-skill N --review R`. It creates a local branch of the skills repository holding the draft, without touching the checked-out files. It does not merge or push.
+3. Run `approve-skill N --review R --session S`. It creates a local branch of the skills repository holding the draft, without touching the checked-out files. It does not merge or push.
 4. Show him the `next_steps` from the result. The skill is not live until he merges it.
 
 A draft that is not a whole skill file is refused. Say so, and offer to make the change with him by hand.
@@ -68,11 +76,11 @@ A draft that is not a whole skill file is refused. Say so, and offer to make the
 **`hook`, `global_rule`**
 1. Show `record.exact_change` in full, and which file it changes. The model wrote it without always seeing the source, so read the target file first, and tell him of anything that does not match.
 2. Wait for his yes. Then apply it. These files are in the public repository, so apply the private-material check above to what you add. Leave it uncommitted unless he asks for a commit.
-3. Run `record-approved N --review R --detail "<what was applied>"`.
+3. Run `record-approved N --review R --session S --detail "<what was applied>"`.
 
 **`plugin`, `mcp`**
 1. Show the exact command from `record.exact_change`. Wait for his yes. Run it.
-2. Run `record-approved N --review R --detail "<the command run>"`. The result holds `refresh_manifest: true`.
+2. Run `record-approved N --review R --session S --detail "<the command run>"`. The result holds `refresh_manifest: true`.
 3. Refresh the manifest, and show him the diff:
 
    ```powershell
@@ -84,13 +92,13 @@ A draft that is not a whole skill file is refused. Say so, and offer to make the
 5. Remind him to restart Claude Code for the change to take effect.
 
 **`memory_fact`, `memory_deletion`**
-Say what will be written or removed, then run `approve-memory N --review R`. It makes a new commit in that memory folder, which can be reverted.
+Say what will be written or removed, then run `approve-memory N --review R --session S`. It makes a new commit in that memory folder, which can be reverted.
 
 **`memory_revision`, `item_revision`**
-Nothing is prepared, since the item is a question. Read it with him using `why N`. If he wants an edit, make that edit, and then run `record-approved N --review R --detail "<what changed>"`. If he wants no change, use `reject N`.
+Nothing is prepared, since the item is a question. Read it with him using `why N`. If he wants an edit, make that edit, and then run `record-approved N --review R --session S --detail "<what changed>"`. If he wants no change, use `reject N`.
 
 **`monthly_finding`**
-Nothing is prepared. The item comes from the monthly check, and `record.evidence` holds the file and line of each side, or what was measured. Read those lines in the files themselves before saying anything about them, since they may have changed. A question about staleness is his to answer: never treat it as settled. If he wants an edit, show it, make it after his yes, and run `record-approved N --review R --detail "<what changed>"`. If he wants no change, use `reject N`, which keeps the same finding out of later months.
+Nothing is prepared. The item comes from the monthly check, and `record.evidence` holds the file and line of each side, or what was measured. Read those lines in the files themselves before saying anything about them, since they may have changed. A question about staleness is his to answer: never treat it as settled. If he wants an edit, show it, make it after his yes, and run `record-approved N --review R --session S --detail "<what changed>"`. If he wants no change, use `reject N`, which keeps the same finding out of later months.
 
 ## Why
 

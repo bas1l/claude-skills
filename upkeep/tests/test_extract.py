@@ -15,6 +15,10 @@ import transcripts as t
 from config import config_from_mapping
 
 
+def extract_window(*arguments, **keywords):
+    return extract.extract_window(*arguments, known_items="skill made-up: A made-up item.", **keywords)
+
+
 def note(**overrides):
     values = {
         "type": "preference",
@@ -79,7 +83,7 @@ def empty_reply():
 def test_each_chunk_gets_validated_notes_and_the_timeline(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     fake = FakeCall([json.dumps({"notes": [note()]})] + [empty_reply()] * 9)
-    summary = extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
+    summary = extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
     assert summary["chunks_done"] == list(range(1, summary["chunks_total"] + 1))
     assert summary["chunks_total"] > 1
     for call in fake.calls:
@@ -95,7 +99,7 @@ def test_each_chunk_gets_validated_notes_and_the_timeline(tmp_path, small_chunks
 def test_fabricated_quote_is_marked_not_found(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     fake = FakeCall([json.dumps({"notes": [note(endorsement_quote="always skip tests")]})] + [empty_reply()] * 9)
-    extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
+    extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
     document = json.loads((tmp_path / "out" / "chunk-001.json").read_text(encoding="utf-8"))
     assert document["notes"][0]["quote_check"] == extract.QUOTE_NOT_FOUND
 
@@ -105,11 +109,11 @@ def test_interrupted_run_resumes_without_duplicates(tmp_path, small_chunks):
     out = str(tmp_path / "out")
     first = FakeCall([json.dumps({"notes": [note()]}), model_call.ModelCallError("interrupted")])
     with pytest.raises(model_call.ModelCallError):
-        extract.extract_window(item, out, small_chunks, "sonnet", "r1", 5.0, call=first)
+        extract_window(item, out, small_chunks, "sonnet", "r1", 5.0, call=first)
     assert len(first.calls) == 2
 
     second = FakeCall([empty_reply()] * 9)
-    summary = extract.extract_window(item, out, small_chunks, "sonnet", "r2", 5.0, call=second)
+    summary = extract_window(item, out, small_chunks, "sonnet", "r2", 5.0, call=second)
     assert len(second.calls) == summary["chunks_total"] - 1
     assert summary["notes"] == 1
 
@@ -118,7 +122,7 @@ def test_invalid_reply_raises_keeps_the_reply_and_writes_no_notes(tmp_path, smal
     item = make_item(tmp_path, small_chunks)
     fake = FakeCall(['<invoke name="Bash">'])
     with pytest.raises(schemas.SchemaError):
-        extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
+        extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
     assert (tmp_path / "out" / "chunk-001.rejected").exists()
     assert not (tmp_path / "out" / "chunk-001.json").exists()
 
@@ -126,16 +130,16 @@ def test_invalid_reply_raises_keeps_the_reply_and_writes_no_notes(tmp_path, smal
 def test_rerun_with_different_chunks_refuses_to_resume(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     out = str(tmp_path / "out")
-    extract.extract_window(item, out, small_chunks, "sonnet", "r1", 5.0, call=FakeCall([empty_reply()] * 9))
+    extract_window(item, out, small_chunks, "sonnet", "r1", 5.0, call=FakeCall([empty_reply()] * 9))
     other = dataclasses.replace(small_chunks, chunking=dataclasses.replace(small_chunks.chunking, chunk_chars=200))
     with pytest.raises(ValueError, match="refusing to resume"):
-        extract.extract_window(item, out, other, "sonnet", "r2", 5.0, call=FakeCall([empty_reply()] * 9))
+        extract_window(item, out, other, "sonnet", "r2", 5.0, call=FakeCall([empty_reply()] * 9))
 
 
 def test_budget_passed_to_each_call_shrinks(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     fake = FakeCall([empty_reply()] * 9)
-    extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 1.0, call=fake)
+    extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 1.0, call=fake)
     budgets = [call["max_budget_usd"] for call in fake.calls]
     assert budgets[:2] == [1.0, 0.75]
 
@@ -143,7 +147,7 @@ def test_budget_passed_to_each_call_shrinks(tmp_path, small_chunks):
 def test_only_named_chunks_are_run(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     fake = FakeCall([empty_reply()])
-    summary = extract.extract_window(item, str(tmp_path / "out"), small_chunks, None, "r1", 5.0, [2], call=fake)
+    summary = extract_window(item, str(tmp_path / "out"), small_chunks, None, "r1", 5.0, [2], call=fake)
     assert summary["chunks_done"] == [2]
     assert fake.calls[0]["model"] is None
 
@@ -151,7 +155,7 @@ def test_only_named_chunks_are_run(tmp_path, small_chunks):
 def test_unknown_chunk_number_raises(tmp_path, small_chunks):
     item = make_item(tmp_path, small_chunks)
     with pytest.raises(ValueError, match="no such chunks"):
-        extract.extract_window(item, str(tmp_path / "out"), small_chunks, None, "r1", 5.0, [99], call=FakeCall([]))
+        extract_window(item, str(tmp_path / "out"), small_chunks, None, "r1", 5.0, [99], call=FakeCall([]))
 
 
 def test_unknown_origin_stops_extraction_before_any_call(tmp_path, small_chunks):
@@ -160,14 +164,14 @@ def test_unknown_origin_stops_extraction_before_any_call(tmp_path, small_chunks)
     item = extract.whole_session_item(sessions.SessionFiles("F--p", "sid", main, ()), small_chunks)
     fake = FakeCall([])
     with pytest.raises(t.TranscriptFormatError):
-        extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
+        extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=fake)
     assert fake.calls == []
 
 
 def test_count_only_item_is_refused(tmp_path, small_chunks):
     item = dataclasses.replace(make_item(tmp_path, small_chunks), mode=sessions.MODE_COUNT_ONLY)
     with pytest.raises(ValueError, match="not for model reading"):
-        extract.extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=FakeCall([]))
+        extract_window(item, str(tmp_path / "out"), small_chunks, "sonnet", "r1", 5.0, call=FakeCall([]))
 
 
 def test_config_defaults_derive_from_home_and_missing_keys_raise(config):

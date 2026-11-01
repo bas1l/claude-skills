@@ -2,7 +2,7 @@ You are looking at how a scheduled job that maintains an AI coding assistant's s
 
 ## What you receive
 
-- Counts by script: decisions by outcome, by kind of item, and by the grounds given; the acceptance rate; the memories that were undone; the weeks covered.
+- Counts by script: decisions by outcome, by kind of item, and by the grounds given; the acceptance rate of proposals, which counts only what someone had to approve or reject; for memory changes already applied, how many stand, were kept or were undone, with the undo rate, since a change stands unless it is undone and silence is not a decision; the memories that were undone; the weeks covered.
 - The settings that may be tuned, with their current values.
 
 ## What to do

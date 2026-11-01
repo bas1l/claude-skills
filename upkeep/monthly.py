@@ -27,13 +27,14 @@ report.json, schema version 1 (checked by ``schemas.validate_monthly_report``):
 
     month, run_id, generated_at, status ok|failed|budget_stopped, stop_reason
     context               what each session starts with, per project; see monthly_inventory.py
-    coverage              files and characters read, groups, skills
+    coverage              files and characters read, groups, skills, unreadable_headers, pattern_matches
     counts                findings by question
     findings[]            the proposals, in the fields of the weekly report's, kind monthly_finding.
                           evidence holds audit_question, category, sides and measured
     rejected[]            subject, question, reason, detail: findings refused by a check
     already_raised[]      subject, question: left out because an earlier month raised them
-    duplicate_candidates  candidates, judged_same, judged_different, each with a reason
+    duplicate_candidates  candidates, judged_same, judged_different, each with a reason, and left_out:
+                          texts alike that are in no candidate, since their group was too large
     quality               status not_enough_data, with a plain statement, or the counts
     replacements          checked, kept (nothing outside does the job), rejected, order for next time
     usage                 model_calls, tokens, cost_usd
@@ -150,6 +151,7 @@ def load_state(config: Config) -> dict[str, Any]:
 
 
 def month_already_done(config: Config, month: str) -> bool:
+    """A retry does nothing after a success, which is what makes the task's second trigger safe."""
     path = os.path.join(report_dir_of(config, month), "report.json")
     return os.path.exists(path) and pass_support.read_json(path)["status"] == STATUS_OK
 
@@ -161,6 +163,7 @@ class Findings:
     records: list[dict[str, Any]] = field(default_factory=list)
     rejected: list[dict[str, Any]] = field(default_factory=list)
     already_raised: list[dict[str, str]] = field(default_factory=list)
+    citations_held: int = 0
 
     def reject(self, subject: str, question: str, reason: str, detail: str) -> None:
         self.rejected.append({"subject": subject, "question": question, "reason": reason, "detail": detail})
@@ -198,7 +201,7 @@ def resolve_side(side: Mapping[str, Any], files: Mapping[str, inventory.SourceFi
     }
 
 
-def _resolved_sides(entry: Mapping[str, Any], files: Mapping[str, inventory.SourceFile], config: Config, minimum: int, question: str, found: Findings) -> Optional[list[dict[str, Any]]]:
+def _resolved_sides(entry: Mapping[str, Any], files: Mapping[str, inventory.SourceFile], config: Config, minimum: int, question: str, found: Findings, files_minimum: int = 1) -> Optional[list[dict[str, Any]]]:
     subject = entry["title"]
     try:
         sides = [resolve_side(side, files, config.monthly.quote_min_chars) for side in entry["sides"]]
@@ -208,6 +211,10 @@ def _resolved_sides(entry: Mapping[str, Any], files: Mapping[str, inventory.Sour
     if len({(side["ref"], side["line"]) for side in sides}) < minimum:
         found.reject(subject, question, REJECT_FEW_SIDES, f"{len(entry['sides'])} sides given, {minimum} distinct places needed")
         return None
+    if len({side["ref"] for side in sides}) < files_minimum:
+        found.reject(subject, question, REJECT_FEW_SIDES, "a duplicate needs two different files")
+        return None
+    found.citations_held += 1
     return sides
 
 
@@ -380,7 +387,7 @@ def _duplicate_finding(entry: Mapping[str, Any], sides: Sequence[Mapping[str, An
     return question, finding(question, category, entry["title"], entry["what"], entry["why"], sides[0]["name"], sides, entry["exact_change"], distinct="duplicate")
 
 
-def _gate_duplicates(replies: Sequence[Mapping[str, Any]], candidates: Mapping[str, inventory.Candidate], config: Config, found: Findings, earlier: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _gate_duplicates(replies: Sequence[Mapping[str, Any]], candidates: Mapping[str, inventory.Candidate], config: Config, found: Findings, earlier: Sequence[Mapping[str, Any]], left_out: Sequence[str]) -> dict[str, Any]:
     """Count only what a reader judged, after its citations hold. A candidate left unanswered raises."""
     answered = [entry["cluster"] for entry in replies]
     if sorted(answered) != sorted(candidates):
@@ -393,22 +400,21 @@ def _gate_duplicates(replies: Sequence[Mapping[str, Any]], candidates: Mapping[s
             judged_different.append({"cluster": entry["cluster"], "units": [unit.label for unit in candidate.units], "reason": entry["reason"]})
             continue
         files = {unit.source.ref: unit.source for unit in candidate.units}
-        sides = _resolved_sides(entry, files, config, 2, QUESTION_COHERENCE, found)
+        sides = _resolved_sides(entry, files, config, 2, QUESTION_COHERENCE, found, files_minimum=2)
         if sides is None:
-            continue
-        if len({side["ref"] for side in sides}) < 2:
-            found.reject(entry["title"], QUESTION_COHERENCE, REJECT_FEW_SIDES, "a duplicate needs two different files")
             continue
         question, record = _duplicate_finding(entry, sides)
         judged_same.append({"cluster": entry["cluster"], "reason": entry["reason"], "question": question})
         _add(record, question, found, earlier, config.weekly.reproposal_word_overlap)
-    return {"candidates": len(candidates), "judged_same": judged_same, "judged_different": judged_different}
+    return {"candidates": len(candidates), "judged_same": judged_same, "judged_different": judged_different, "left_out": list(left_out)}
 
 
 def _check_citation_batch(found: Findings, minimum: int) -> None:
-    """One citation failing is that finding's problem. All of them failing is the pass's."""
+    """One citation failing is that finding's problem. All of them failing is the pass's. Only a
+    model's finding whose citations held shows the files were read: what a script measured says
+    nothing about that, and neither does anything raised in an earlier month."""
     failures = sum(1 for item in found.rejected if item["reason"] in CITATION_REASONS)
-    if failures >= minimum and not found.records and not found.already_raised:
+    if failures >= minimum and not found.citations_held:
         raise CitationBatchError(f"all {failures} findings failed their citations")
 
 
@@ -433,35 +439,77 @@ def _tokens(chars: int, ratio: float) -> int:
     return int(chars / ratio)
 
 
-def _summary_finding(context: Mapping[str, Any], quality: Mapping[str, Any], replacements: Mapping[str, Any], duplicates: Mapping[str, Any], month: str) -> dict[str, Any]:
+def _refused_line(found: Findings) -> str:
+    reasons: dict[str, int] = {}
+    for item in found.rejected:
+        reasons[item["reason"]] = reasons.get(item["reason"], 0) + 1
+    detail = f" ({', '.join(f'{reason}: {count}' for reason, count in sorted(reasons.items()))})" if reasons else ""
+    return (
+        f"Refused by the checks: {len(found.rejected)}{detail}. Left out because an earlier month raised them: {len(found.already_raised)}. "
+        "Each is listed in this month's report.json."
+    )
+
+
+def _summary_finding(context: Mapping[str, Any], quality: Mapping[str, Any], replacements: Mapping[str, Any], duplicates: Mapping[str, Any], month: str, found: Findings, coverage: Mapping[str, Any]) -> dict[str, Any]:
     """What was measured this month, for reading: it holds what has no decision of its own."""
     ratio = context["tokens_estimate_ratio"]
+    typical, largest = context["median_chars"], context["max_chars"]
+    no_folder = context["projects_without_a_known_folder"]
+    per_project = (
+        "No project has a known working folder, so nothing per project was measured."
+        if largest is None else
+        f"Per project, median {typical} characters, largest {largest} (about {_tokens(largest, ratio)} tokens at {ratio} characters a token, an estimate)."
+    )
+    left_out = duplicates["left_out"]
+    unreadable = coverage["unreadable_headers"]
     measured = [
         f"Global instructions: {context['global_chars']} characters. Skill listing: {context['skill_listing_chars']} characters for {context['skills_listed']} skills.",
-        f"Per project, median {context['median_chars']} characters, largest {context['max_chars']} (about {_tokens(context['max_chars'] or 0, ratio)} tokens at {ratio} characters a token, an estimate).",
+        per_project,
+        *([f"{no_folder} {'project is' if no_folder == 1 else 'projects are'} left out of these figures, because the working folder is not known, so its instructions cannot be measured."] if no_folder else []),
         *[f"Large: {entry['what']}, {entry['chars']} characters." for entry in context["largest"]],
         f"Not measured: {', '.join(context['not_measured'])}.",
         quality["statement"],
         f"Duplicates: {duplicates['candidates']} candidates compared by script, {len(duplicates['judged_same'])} judged the same after reading, {len(duplicates['judged_different'])} judged different.",
         f"Replacements: checked {len(replacements['checked'])} of {replacements['skills_total']} skills this month; {len(replacements['kept'])} have nothing outside that does the job.",
+        _refused_line(found),
+        *([f"{len(left_out)} texts alike were left out of the comparison, because their group was too large to show whole: {', '.join(left_out)}."] if left_out else []),
+        *([f"{len(unreadable)} files have a header that could not be read, and were read as having none: {', '.join(item['what'] for item in unreadable)}."] if unreadable else []),
+        *([f"Secret patterns matched {coverage['pattern_matches']} times in the files read, and were redacted before any call."] if coverage["pattern_matches"] else []),
     ]
+    what = (
+        "No project has a known working folder, so what a session starts with could not be measured per project."
+        if largest is None else
+        f"Each session starts with about {typical} characters of setup in a typical project, and {largest} in the largest."
+    )
     return finding(
         QUESTION_COHERENCE, CATEGORY_SUMMARY, f"What the monthly check measured, {month}",
-        f"Each session starts with about {context['median_chars']} characters of setup in a typical project, and {context['max_chars']} in the largest.",
+        what,
         "For reading. It holds what has no decision of its own. Say what you want trimmed, or reject it to close it.",
         month, measured=measured, distinct=month,
     )
 
 
+def _is_applied_change(item: Mapping[str, Any]) -> bool:
+    return item["section"] == schemas.SECTION_MEMORY and item["record"]["outcome"] == schemas.OUTCOME_APPLIED
+
+
 def quality_counts(config: Config) -> dict[str, Any]:
-    """Decisions across every review, each item once. A week counts if something was decided in it."""
+    """Decisions across every review, each item once. A week counts if something was decided in it.
+
+    The two kinds of item answer different questions, so they get different figures. A proposal
+    waits for a yes or a no, and ``acceptance_rate`` is the share of yeses, or None with no answer
+    yet. An applied change stands unless someone undoes it, so silence says nothing, and only
+    counting it among all those applied keeps one undo from reading as a rate of 0."""
     data_dir = config.paths.data_dir
     items: dict[str, Mapping[str, Any]] = {}
+    applied: dict[str, Mapping[str, Any]] = {}
     for week in review_data.week_folders(data_dir):
         if os.path.isfile(review_data.review_path(data_dir, week)):
             for item in review_data.load_review(data_dir, week)["items"]:
                 if item["decision"] is not None:
                     items[item["key"]] = item
+                if _is_applied_change(item):
+                    applied[item["key"]] = item
     decided = list(items.values())
     outcomes: dict[str, int] = {}
     by_kind: dict[str, dict[str, int]] = {}
@@ -481,12 +529,22 @@ def quality_counts(config: Config) -> dict[str, Any]:
             by_basis[record["basis"]][outcome] += 1
         if outcome == schemas.OUTCOME_UNDONE:
             undone.append({"memory": record["memory"], "project_folder": record["project_folder"], "week": item["week"]})
-    accepted = outcomes.get(schemas.OUTCOME_APPROVED, 0) + outcomes.get(schemas.OUTCOME_KEPT, 0)
+    answered = [item for item in decided if not _is_applied_change(item)]
+    accepted = sum(1 for item in answered if item["decision"]["outcome"] == schemas.OUTCOME_APPROVED)
+    outcome_of = [None if item["decision"] is None else item["decision"]["outcome"] for item in applied.values()]
+    undone_count, kept_count = outcome_of.count(schemas.OUTCOME_UNDONE), outcome_of.count(schemas.OUTCOME_KEPT)
     return {
         "weeks_with_decisions": len(weeks),
         "decided": len(decided),
         "outcomes": outcomes,
-        "acceptance_rate": round(accepted / len(decided), 3) if decided else None,
+        "acceptance_rate": round(accepted / len(answered), 3) if answered else None,
+        "memory_changes": {
+            "applied": len(applied),
+            "undone": undone_count,
+            "kept": kept_count,
+            "standing": len(applied) - undone_count - kept_count,
+            "undo_rate": round(undone_count / len(applied), 3) if applied else None,
+        },
         "by_kind": by_kind,
         "by_basis": by_basis,
         "undone_memories": undone,
@@ -515,8 +573,10 @@ def _run_quality(config: Config, caller: pass_support.Caller, groups_dir: str, f
         "monthly-quality", caller, schemas.parse_monthly_quality,
     )
     rate = counts["acceptance_rate"]
+    changes = counts["memory_changes"]
     measured = [
-        f"Acceptance rate: {rate}, over {counts['decided']} decisions in {counts['weeks_with_decisions']} weeks.",
+        f"Acceptance rate of proposals: {'none answered yet' if rate is None else rate}. {counts['decided']} decisions in {counts['weeks_with_decisions']} weeks. "
+        f"Memory changes applied: {changes['applied']}, of which {changes['undone']} undone, {changes['kept']} kept and {changes['standing']} standing.",
         f"Outcomes: {json.dumps(counts['outcomes'], ensure_ascii=False)}. Memories undone: {len(counts['undone_memories'])}.",
     ]
     for entry in suggestions:
@@ -534,9 +594,11 @@ def _run_quality(config: Config, caller: pass_support.Caller, groups_dir: str, f
     return {"status": QUALITY_MEASURED, "statement": f"Upkeep quality: {measured[0]}", **counts}
 
 
-def choose_skills(names: Sequence[str], checked: Mapping[str, str], budget: int) -> list[str]:
-    """The skills checked longest ago, never-checked first, so that all are covered over time."""
-    return sorted(names, key=lambda name: (checked.get(name, ""), name))[:budget]
+def choose_skills(names: Sequence[str], checked: Mapping[str, str], budget: int, month: str) -> list[str]:
+    """The skills checked longest ago, never-checked first, so that all are covered over time. A
+    skill already checked this month comes first: that is a retry after a crash, which has to read
+    the same skills again and find their research where it left it."""
+    return sorted(names, key=lambda name: (checked.get(name) != month, checked.get(name, ""), name))[:budget]
 
 
 def _project_names(corpus: inventory.Corpus, config: Config) -> list[str]:
@@ -548,12 +610,12 @@ def _project_names(corpus: inventory.Corpus, config: Config) -> list[str]:
 
 
 def _run_replacements(
-    corpus: inventory.Corpus, local: LocalSettings, config: Config, caller: pass_support.Caller, report_dir: str, state: Mapping[str, Any], found: Findings, earlier: Sequence[Mapping[str, Any]]
+    corpus: inventory.Corpus, local: LocalSettings, config: Config, caller: pass_support.Caller, report_dir: str, state: Mapping[str, Any], found: Findings, earlier: Sequence[Mapping[str, Any]], month: str
 ) -> dict[str, Any]:
     """Research a few skills. Search being unavailable raises, and the pass writes no results."""
     settings = config.monthly
     skills = {item.name: item for item in corpus.skills}
-    chosen = choose_skills(sorted(skills), state["replacement_checked"], settings.replacement_skills_per_month)
+    chosen = choose_skills(sorted(skills), state["replacement_checked"], settings.replacement_skills_per_month, month)
     outcome: dict[str, Any] = {"skills_total": len(skills), "checked": [], "kept": [], "rejected": []}
     if not chosen:
         return outcome
@@ -578,6 +640,7 @@ def _run_replacements(
                 found.reject(name, QUESTION_REPLACEMENT, REJECT_RESEARCH, str(error))
                 outcome["rejected"].append(name)
                 continue
+            record, _ = extract.redact_value(record, config)
             pass_support.write_json(cache, {"description_sha256": digest, "research": record})
         outcome["checked"].append(name)
         tools = record["existing_tools"]
@@ -608,6 +671,9 @@ def _run_stages(config: Config, local: LocalSettings, month: str, caller: pass_s
     report_dir = report_dir_of(config, month)
     groups_dir = os.path.join(report_dir, "groups")
     found = Findings()
+    # By reference, so that a run stopping early still reports what it refused.
+    report["rejected"] = found.rejected
+    report["already_raised"] = found.already_raised
     earlier = earlier_findings(config, month)
     corpus = inventory.read_corpus(config)
     context = inventory.measure_context(corpus, config)
@@ -620,6 +686,8 @@ def _run_stages(config: Config, local: LocalSettings, month: str, caller: pass_s
         "skills": len(corpus.skills),
         "project_instruction_files": len(corpus.project_files),
         "groups": [{"name": group.name, "files": len(group.files), "chars": group.chars} for group in groups],
+        "unreadable_headers": list(corpus.unreadable_headers),
+        "pattern_matches": corpus.pattern_matches,
     }
 
     _context_findings(context, config, month, found, earlier)
@@ -633,7 +701,8 @@ def _run_stages(config: Config, local: LocalSettings, month: str, caller: pass_s
         )
         _gate_coherence(reply, group, config, found, earlier)
 
-    candidates = inventory.duplicate_candidates(corpus, config)
+    comparison = inventory.compare_for_duplicates(corpus, config)
+    candidates = comparison.candidates
     verdicts: list[dict[str, Any]] = []
     duplicates_prompt = pass_support.read_text(DUPLICATES_PROMPT)
     for position, batch in enumerate(inventory.pack_candidates(candidates, settings.group_chars), 1):
@@ -642,20 +711,18 @@ def _run_stages(config: Config, local: LocalSettings, month: str, caller: pass_s
             os.path.join(groups_dir, f"duplicates-{position}.json"), duplicates_prompt, stdin_text, settings.duplicates_model,
             f"monthly-duplicates:{position}", caller, schemas.parse_monthly_duplicates,
         ))
-    duplicates = _gate_duplicates(verdicts, {candidate.ref: candidate for candidate in candidates}, config, found, earlier)
+    duplicates = _gate_duplicates(verdicts, {candidate.ref: candidate for candidate in candidates}, config, found, earlier, comparison.left_out)
     report["duplicate_candidates"] = duplicates
     _check_citation_batch(found, config.weekly.quote_failure_batch_min)
 
     quality = _run_quality(config, caller, groups_dir, found, earlier)
     report["quality"] = quality
-    replacements = _run_replacements(corpus, local, config, caller, report_dir, state, found, earlier)
+    replacements = _run_replacements(corpus, local, config, caller, report_dir, state, found, earlier, month)
     report["replacements"] = replacements
 
     records = merge_overlapping(found.records)
-    records.append(_summary_finding(context, quality, replacements, duplicates, month))
+    records.append(_summary_finding(context, quality, replacements, duplicates, month, found, report["coverage"]))
     report["findings"] = records
-    report["rejected"] = found.rejected
-    report["already_raised"] = found.already_raised
     report["counts"] = _counts_by_question(records)
 
 
@@ -713,6 +780,7 @@ def run_monthly(
         result["wall_seconds"] = round(time.monotonic() - started, 1)
         return result
 
+    memory_store.remove_partial_files(config.paths.data_dir)
     report = _empty_report(month, run_id, now)
     report_dir = report_dir_of(config, month)
     caller = pass_support.Caller(config, report_dir, run_id, 0.0, call)
@@ -756,7 +824,7 @@ def run_monthly(
         pass_support.write_json(state_path(config), state)
     pass_support.write_json(os.path.join(report_dir, "report.json"), report)
 
-    result["secrets_redacted"] = redacted
+    result["secrets_redacted"] = redacted + caller.secrets_redacted
     result["model_calls"] = caller.totals.calls
     result["tokens"] = caller.totals.tokens
     result["cost_usd"] = round(caller.totals.cost_usd, 4)

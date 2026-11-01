@@ -11,10 +11,10 @@ How a run ends:
 
 What stops a run, and what does not:
 
-    TranscriptFormatError  stops: the transcript format changed, so later sessions would fail too
     ModelCallError         stops: limits, login and network failures repeat for each call
-    SchemaError, a call timeout
-                           that session only: listed with its id, the others continue
+    TranscriptFormatError, SchemaError, a call timeout
+                           that session only: listed with its id, left unprocessed, the others
+                           continue, and the run ends failed with a non-zero exit
 
 A window whose records changed after an interruption no longer matches its recorded chunks.
 Its partial results and the ledger entries drawn from them are discarded, and the window is
@@ -28,9 +28,16 @@ Written under the data folder:
     counts/<date>/<window>.json          counts by script, including count-only sessions
     logs/usage.jsonl                     one line per model call across runs
     ledgers/                             a ledger for each new item, entries from notes, flags
+    notes/<date>/<window>/stance-checks.json   verdicts of the stance check, see stance_check.py
+
+Tool-less calls then judge the stances the notes took on items, unless the run has already stopped or
+run out of budget. A stance not judged yet makes no entry and waits for the next run.
 
 Ledgers are brought up to date after the sessions, whatever happened to them, because notes
-already on disk are valid. A ledger failure fails the run and leaves the notes as they are.
+already on disk are valid. A ledger failure fails the run and leaves the notes as they are. One item
+that cannot be read does not: it is listed, in the result as ``item_problems`` and in
+``ledgers/item-problems.json`` for the review, the other items go on, and the run ends failed with a
+non-zero exit, as for a session. A possible rename is listed too, and fails nothing.
 
 ``<date>`` is the local date of the end of the window, so a resumed window keeps its folder.
 """
@@ -48,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import applied_changes
 import backfill
 import extract
 import ledger
@@ -55,6 +63,7 @@ import memory_store
 import model_call
 import schemas
 import sessions
+import stance_check
 import transcripts
 from config import Config, load_config
 
@@ -81,9 +90,14 @@ def init_state(config: Config) -> None:
 
 
 def window_name(item: sessions.WorkItem) -> str:
-    """A name stable for a window. State is keyed by folder and id, so the folder is in it."""
+    """A name stable for a window. State is keyed by folder and id, so the folder is in it. A window
+    holding only late records starts where the last one ended, as the next such window would, so
+    its name also says from which line it reads."""
     folder_hash = hashlib.sha256(item.files.project_folder.encode("utf-8")).hexdigest()[:8]
-    return f"{item.files.session_id}-{folder_hash}-{item.after.strftime('%Y%m%dT%H%M%S%f')}"
+    name = f"{item.files.session_id}-{folder_hash}-{item.after.strftime('%Y%m%dT%H%M%S%f')}"
+    if item.through <= item.after and item.lines is not None:
+        return f"{name}-L{sum(item.lines.after.values())}"
+    return name
 
 
 def window_date(item: sessions.WorkItem) -> str:
@@ -137,7 +151,7 @@ class RunTotals:
 
 def _process_count_only(item: sessions.WorkItem, config: Config, run_id: str) -> int:
     entries = list(
-        transcripts.iter_session_entries(item.files.main_path, item.files.subagent_paths, item.after, item.through)
+        transcripts.iter_session_entries(item.files.main_path, item.files.subagent_paths, item.after, item.through, item.lines)
     )
     document, redacted = extract.counts_document(item, entries, config, run_id)
     path = counts_path_of(item, config)
@@ -154,7 +168,8 @@ def _process_read(
     call: Callable[..., model_call.ModelResult],
 ) -> dict[str, Any]:
     out_dir = notes_dir_of(item, config)
-    summary = extract.extract_window(item, out_dir, config, config.model.extract_model, run_id, budget_usd, call=call)
+    known_items = backfill.known_items_text(config, item.files.project_folder)
+    summary = extract.extract_window(item, out_dir, config, config.model.extract_model, run_id, budget_usd, call=call, known_items=known_items)
     path = counts_path_of(item, config)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     shutil.copyfile(os.path.join(out_dir, "counts.json"), path)
@@ -186,11 +201,15 @@ def _update_ledgers(config: Config, as_of: datetime) -> dict[str, Any]:
     """New items get a ledger, notes become entries, and the revision flags are recomputed."""
     ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
     synced = backfill.sync_items(config, as_of)
-    notes = ledger.apply_notes(os.path.join(config.paths.data_dir, "notes"), ledgers_dir)
-    flags = ledger.write_flags(ledgers_dir, as_of, config.ledger)
+    problems = list(synced["item_problems"])
+    aliases = backfill.display_names(backfill.scan_inventory(config))
+    notes = ledger.apply_notes(os.path.join(config.paths.data_dir, "notes"), ledgers_dir, problems, aliases)
+    flags = ledger.write_flags(ledgers_dir, as_of, config.ledger, problems)
+    ledger.write_item_problems(ledgers_dir, problems, synced["possible_renames"])
     return {
         "items": synced["items"],
         "ledgers_created": synced[ledger.OUTCOME_CREATED],
+        "ledgers_renamed_in_case": synced[ledger.OUTCOME_CASE_RENAMED],
         "absent_from_inventory": len(synced["absent_from_inventory"]),
         "notes": notes,
         "revision_flags": len(flags),
@@ -204,6 +223,9 @@ def run_daily(
 ) -> dict[str, Any]:
     """Run the pass and return its result. Everything written is committed locally at the end."""
     started = time.monotonic()
+    memory_store.remove_partial_files(config.paths.data_dir)
+    # Before the snapshot, which would otherwise commit a crashed apply's files as live edits.
+    applied_changes.settle_folders(config)
     message = f"Snapshot of edits by live sessions, upkeep run {run_id}"
     snapshot = memory_store.snapshot_all(config.paths.projects_dir, config.memory, message)
 
@@ -227,7 +249,9 @@ def run_daily(
             {"session": key, "error": "a pinned window's transcript is gone"}
             for key in _missing_pinned_sessions(state, discovered)
         )
-        work = sessions.select_work(discovered, state, config.sessions)
+        work, unreadable = sessions.select_work(discovered, state, config.sessions)
+        sessions.save_state(path, state)
+        failed.extend({"session": failure.state_key, "error": failure.error} for failure in unreadable)
         work.sort(key=lambda item: (not item.resumed, item.through))
         selected = len(work)
         for position, item in enumerate(work):
@@ -260,13 +284,22 @@ def run_daily(
                 budget_stopped = True
                 backlog = remaining
                 break
-            except (schemas.SchemaError, extract.WindowMismatchError, subprocess.TimeoutExpired) as error:
+            except (transcripts.TranscriptFormatError, schemas.SchemaError, extract.WindowMismatchError, ledger.LedgerError, subprocess.TimeoutExpired) as error:
                 failed.append({"session": key, "error": f"{type(error).__name__}: {error}"})
                 continue
             sessions.mark_processed(state, item)
             sessions.save_state(path, state)
-    except (transcripts.TranscriptFormatError, model_call.ModelCallError) as error:
+    except model_call.ModelCallError as error:
         stop_reason = f"{type(error).__name__}: {error}"
+
+    stance_summary: Optional[dict[str, Any]] = None
+    if stop_reason is None and not budget_stopped:
+        try:
+            stance_summary = stance_check.check_pending(config, run_id, config.model.run_budget_usd - totals.cost_usd, totals.wrap(call, ledger.STANCE_USAGE_KEY))
+        except model_call.BudgetExhaustedError:
+            budget_stopped = True
+        except (model_call.ModelCallError, schemas.SchemaError, ledger.LedgerError, backfill.InventoryError, subprocess.TimeoutExpired) as error:
+            stop_reason = f"stance check: {type(error).__name__}: {error}"
 
     ledger_summary: Optional[dict[str, Any]] = None
     try:
@@ -274,8 +307,13 @@ def run_daily(
     except (ledger.LedgerError, backfill.InventoryError, schemas.SchemaError, json.JSONDecodeError, KeyError) as error:
         ledger_failure = f"ledger update: {type(error).__name__}: {error}"
         stop_reason = ledger_failure if stop_reason is None else f"{stop_reason}; {ledger_failure}"
+    if ledger_summary is not None and stance_summary is not None:
+        # The check brought the items up to date first, so what it found new is new in this run too.
+        ledger_summary["ledgers_created"] += stance_summary[ledger.OUTCOME_CREATED]
+        ledger_summary["ledgers_renamed_in_case"] += stance_summary[ledger.OUTCOME_CASE_RENAMED]
 
-    if stop_reason is not None or failed or snapshot["errors"]:
+    held = ledger.read_item_problems(ledger.ledgers_dir_of(config.paths.data_dir))
+    if stop_reason is not None or failed or snapshot["errors"] or held["problems"]:
         status = STATUS_FAILED
     elif budget_stopped:
         status = STATUS_BUDGET_STOPPED
@@ -294,6 +332,8 @@ def run_daily(
         "sessions_read": processed_read,
         "sessions_count_only": processed_count_only,
         "failed_sessions": failed,
+        "item_problems": held["problems"],
+        "possible_renames": held["possible_renames"],
         "backlog_sessions": backlog,
         "notes": notes,
         "secrets_redacted": secrets_redacted,
@@ -310,6 +350,7 @@ def run_daily(
             "empty": len(snapshot[memory_store.RESULT_EMPTY]),
             "errors": snapshot["errors"],
         },
+        "stance_check": stance_summary,
         "ledger": ledger_summary,
         "data_commit": data_commit,
     }

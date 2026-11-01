@@ -14,17 +14,22 @@ A folder is in exactly one state:
 
 Snapshots commit whatever live sessions left in a folder. Deletions by a session count
 as edits, so a later revert can restore them.
+
+Every memory file is written through a temporary file beside it and ``os.replace``, so a crash
+leaves the old text or the new and never half a file. A temporary left by a crash is removed by
+the next commit or snapshot, and is excluded from what git stages in case it is not.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from config import Config, MemoryConfig, load_config
 
@@ -63,6 +68,12 @@ UPKEEP_GITIGNORE = (
     "/upkeep.lock\n"
     "/failure-marker.json\n"
 )
+
+TEMP_PREFIX = ".upkeep-tmp-"
+PARTIAL_PREFIX = ".part-"
+PARTIAL_SUFFIX = ".tmp"
+_NOT_TEMPORARY = f":(exclude,top){TEMP_PREFIX}*"
+REDACTED_MARK = "[REDACTED-"
 
 _SCRUBBED_GIT_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_PREFIX")
 _NOT_A_REPO = "not a git repository"
@@ -103,7 +114,33 @@ def list_files(folder: str) -> list[str]:
         if directory == folder and ".git" in subdirectories:
             subdirectories.remove(".git")
         found.extend(os.path.relpath(os.path.join(directory, name), folder) for name in names)
-    return sorted(name for name in found if name != ".git")
+    return sorted(name for name in found if name != ".git" and not os.path.basename(name).startswith(TEMP_PREFIX))
+
+
+def _remove_temporaries(folder: str) -> None:
+    """What a crash left behind. No write is under way: only passes under the run lock, and a
+    review session the lock refuses, write here."""
+    for name in os.listdir(folder):
+        if name.startswith(TEMP_PREFIX):
+            os.remove(os.path.join(folder, name))
+
+
+def remove_partial_files(folder: str) -> int:
+    """What a crash left of an atomic JSON write, at any depth. Call only under the run lock, or
+    from a review session the lock refuses, since no such write is under way then. Returns how many."""
+    removed = 0
+    for directory, subdirectories, names in os.walk(folder):
+        if ".git" in subdirectories:
+            subdirectories.remove(".git")
+        for name in names:
+            if name.startswith(PARTIAL_PREFIX) and name.endswith(PARTIAL_SUFFIX):
+                os.remove(os.path.join(directory, name))
+                removed += 1
+    return removed
+
+
+def _stage_all(folder: str) -> None:
+    _run_git(folder, "add", "--all", "--", ".", _NOT_TEMPORARY)
 
 
 def memory_folders(projects_dir: str) -> list[str]:
@@ -172,12 +209,13 @@ def init_memory_repo(folder: str, identity: MemoryConfig) -> None:
     if state != STATE_NEW:
         raise MemoryStoreError(f"{folder}: state {state!r}, expected {STATE_NEW!r}")
     _create_guarded_repo(folder, identity, MEMORY_GUARD)
-    _run_git(folder, "add", "--all")
+    _stage_all(folder)
     _commit(folder, identity, BASELINE_MESSAGE)
 
 
 def snapshot_folder(folder: str, identity: MemoryConfig, message: str) -> str:
     """Commit what live sessions left in a folder; a first write creates its repository."""
+    _remove_temporaries(folder)
     state = classify(folder)
     if state == STATE_EMPTY:
         return RESULT_EMPTY
@@ -193,7 +231,9 @@ def commit_all(folder: str, identity: MemoryConfig, message: str) -> str:
     """Stage everything and commit if anything changed. Refuses a repository with a remote."""
     if remotes_of(folder):
         raise MemoryStoreError(f"{folder}: has a remote; nothing here may have one")
-    _run_git(folder, "add", "--all")
+    _remove_temporaries(folder)
+    remove_partial_files(folder)
+    _stage_all(folder)
     difference = _run_git(folder, "diff", "--cached", "--quiet", check=False)
     if difference.returncode == 0:
         return RESULT_UNCHANGED
@@ -312,8 +352,49 @@ def week_already_applied(folder: str, week: str) -> bool:
         return False
     if _run_git(folder, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode != 0:
         return False
-    found = _run_git(folder, "log", "--fixed-strings", f"--grep={WEEK_TRAILER}: {week}", "--format=%H")
-    return bool(found.stdout.strip())
+    return week_commit(folder, week) is not None
+
+
+def week_commit(folder: str, week: str) -> Optional[str]:
+    """The commit of this week's pass in this folder, if it holds one."""
+    if not os.path.isdir(folder) or classify(folder) != STATE_ADOPTABLE:
+        return None
+    if _run_git(folder, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode != 0:
+        return None
+    found = _run_git(folder, "log", "--fixed-strings", f"--grep={WEEK_TRAILER}: {week}", "--format=%H").stdout.split()
+    return found[0] if found else None
+
+
+def text_sha256(text: Optional[str]) -> Optional[str]:
+    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _show_file(folder: str, commit: str, relative: str) -> Optional[str]:
+    """A file's exact text at a commit, or None if it was not there."""
+    environment = {key: value for key, value in os.environ.items() if key not in _SCRUBBED_GIT_VARIABLES}
+    completed = subprocess.run(
+        ["git", "-C", folder, "show", f"{commit}:{relative}"],
+        capture_output=True,
+        env=environment,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        check=False,
+    )
+    return completed.stdout.decode("utf-8") if completed.returncode == 0 else None
+
+
+def put_back_uncommitted(folder: str, written: Sequence[Mapping[str, Any]]) -> None:
+    """Undo what a crashed apply wrote and never committed. ``written`` holds each file's relative
+    path and the hash of what was written. The snapshot just before it left the old text at HEAD. A
+    file not holding what was written was never reached, or a live session has changed it since."""
+    for item in written:
+        path = os.path.join(folder, item["relative"])
+        if text_sha256(read_memory_file(path)) != item["content_sha256"]:
+            continue
+        old = _show_file(folder, "HEAD", item["relative"])
+        if old is None and os.path.exists(path):
+            os.remove(path)
+        elif old is not None:
+            _write_atomic(path, old)
 
 
 def _prepare_folder_for_writing(folder: str, identity: MemoryConfig, snapshot_message: str) -> None:
@@ -336,8 +417,12 @@ def apply_memory_writes(
     identity: MemoryConfig,
     week: str,
     message: str,
+    before_writing: Optional[Callable[[Sequence[str], Sequence[Mapping[str, Any]]], None]] = None,
 ) -> dict[str, Any]:
     """One commit for one pass in one folder.
+
+    ``before_writing`` gets the files left alone and what is about to be written, with hashes,
+    before anything is, so that a crash at any point after it can be told apart and put right.
 
     What live sessions left is committed first, on its own. A file that changed since its new
     text was worked out is left alone and listed in ``conflicts``; the others go ahead. Only
@@ -347,20 +432,14 @@ def apply_memory_writes(
     if week_already_applied(folder, week):
         raise MemoryStoreError(f"{folder}: already holds a commit of {week}")
     _prepare_folder_for_writing(folder, identity, f"Snapshot of edits by live sessions, before upkeep {week}")
+    ready = []
     conflicts = []
-    paths = []
     for write in writes:
-        path = os.path.join(folder, write.relative)
-        if read_memory_file(path) != write.expected_before:
-            conflicts.append(write.relative)
-            continue
-        if write.content is None:
-            os.remove(path)
+        if read_memory_file(os.path.join(folder, write.relative)) == write.expected_before:
+            ready.append(write)
         else:
-            with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write(write.content)
-        paths.append(write.relative)
-    if not paths:
+            conflicts.append(write.relative)
+    if not ready:
         return {"commit": None, "conflicts": conflicts}
     index_path = os.path.join(folder, INDEX_FILE)
     index_text = read_memory_file(index_path)
@@ -372,18 +451,15 @@ def apply_memory_writes(
         if edit.line is not None:
             index_text = index_with_line(index_text, edit.line)
         edited = True
+    outgoing = [(write.relative, write.content) for write in ready]
     if edited and index_text is not None:
-        with open(index_path, "w", encoding="utf-8", newline="") as handle:
-            handle.write(index_text)
-        paths.append(INDEX_FILE)
-    _run_git(folder, "add", "--all", "--", *paths)
-    _run_git(
-        folder,
-        "-c", f"user.name={identity.author_name}",
-        "-c", f"user.email={identity.author_email}",
-        "commit", "--quiet", "--message", f"{message}\n\n{WEEK_TRAILER}: {week}", "--", *paths,
-    )
-    return {"commit": _run_git(folder, "rev-parse", "HEAD").stdout.strip(), "conflicts": conflicts}
+        outgoing.append((INDEX_FILE, index_text))
+    if before_writing is not None:
+        before_writing(conflicts, [{"relative": relative, "content_sha256": text_sha256(content)} for relative, content in outgoing])
+    for relative, content in outgoing:
+        _write_exact(os.path.join(folder, relative), content)
+    commit = _commit_paths(folder, [relative for relative, _ in outgoing], identity, f"{message}\n\n{WEEK_TRAILER}: {week}")
+    return {"commit": commit, "conflicts": conflicts}
 
 
 class UndoConflictError(MemoryStoreError):
@@ -454,12 +530,51 @@ def _commit_paths(folder: str, paths: Sequence[str], identity: MemoryConfig, mes
     return _run_git(folder, "rev-parse", "HEAD").stdout.strip()
 
 
+def _write_atomic(path: str, text: str) -> None:
+    """Replace a file's text in one step. A failure leaves the old text and no temporary."""
+    temporary = os.path.join(os.path.dirname(path), f"{TEMP_PREFIX}{os.path.basename(path)}.{os.getpid()}")
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except OSError as error:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+        raise MemoryStoreError(f"could not write {path}: {error}") from error
+
+
 def _write_exact(path: str, text: Optional[str]) -> None:
     if text is None:
         os.remove(path)
         return
-    with open(path, "w", encoding="utf-8", newline="") as handle:
-        handle.write(text)
+    _write_atomic(path, text)
+
+
+def exact_change_texts(
+    folder: str, file_name: str, commit: str, before: Optional[str], after: Optional[str], redact: Callable[[str], str]
+) -> tuple[Optional[str], Optional[str]]:
+    """A change's before and after with their real text, from the commit that made it.
+
+    A report holds them redacted, and undo must never write that back. One commit can hold several
+    changes to a file, so a change's own texts need not be the commit's: each line of a recorded
+    text is matched to the line of the commit whose redacted form it is. Raises if one has none.
+    """
+    known: dict[str, str] = {}
+    for version in (_show_file(folder, f"{commit}^", file_name), _show_file(folder, commit, file_name)):
+        for line in (version or "").splitlines(keepends=True):
+            known.setdefault(redact(line), line)
+
+    def exact(recorded: Optional[str]) -> Optional[str]:
+        if recorded is None:
+            return None
+        lines = recorded.splitlines(keepends=True)
+        if any(REDACTED_MARK in line and line not in known for line in lines):
+            raise MemoryStoreError(f"{file_name}: the redacted text of this change cannot be read back from commit {commit}")
+        return "".join(known.get(line, line) for line in lines)
+
+    return exact(before), exact(after)
 
 
 def _index_line_at(folder: str, commit: str, file_name: str) -> Optional[str]:

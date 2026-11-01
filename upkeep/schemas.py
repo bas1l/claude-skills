@@ -38,7 +38,12 @@ STANCE_NO_BEARING = "no_bearing"
 ITEM_STANCES = frozenset({STANCE_FOR, STANCE_AGAINST, STANCE_NO_BEARING})
 NOTE_ITEM_FIELDS = frozenset({"kind", "name", "stance"})
 
-ENTRY_DIRECTIONS = frozenset({STANCE_FOR, STANCE_AGAINST})
+# A rule broken at a cost is on record in the item's ledger, and counts neither way: see ledger.py.
+DIRECTION_RULE_BROKEN = "rule_broken"
+# So is a hook's, tool server's or plugin's own fault, once in a session: see ledger.py.
+DIRECTION_MALFUNCTION = "malfunction"
+ENTRY_DIRECTIONS = frozenset({STANCE_FOR, STANCE_AGAINST, DIRECTION_RULE_BROKEN, DIRECTION_MALFUNCTION})
+KINDS_THAT_ACT = frozenset({"hook", "mcp", "plugin"})
 WHO_USER = "user"
 WHO_AGENT = "agent"
 BASIS_DIRECT = "direct_statement"
@@ -298,7 +303,7 @@ ENDORSED_RELIED_ON = "relied_on"
 MEMORY_CHANGE_FIELDS = frozenset({
     "action", "memory", "note", "claim", "old_text", "endorsement", "quote", "assistant_statement", "title",
 })
-FACT_PROPOSAL_FIELDS = frozenset({"memory", "note", "claim"})
+FACT_PROPOSAL_FIELDS = frozenset({"memory", "note", "claim", "title"})
 
 PROPOSAL_KINDS = frozenset({"skill", "plugin", "hook", "mcp", "global_rule"})
 RESEARCHED_KINDS = frozenset({"skill", "plugin", "mcp"})
@@ -314,6 +319,12 @@ PROPOSAL_FIELDS = frozenset({
     "kind", "change_type", "title", "what", "why", "target", "basis", "notes", "failure", "procedure",
     "exact_change", "draft", "generic_description",
 })
+
+VERDICT_SUPPORTS = "supports"
+VERDICT_NOT_SUPPORTED = "does_not_support"
+VERDICT_ONE_MOMENT = "one_moment_order"
+CLAIM_VERDICTS = frozenset({VERDICT_SUPPORTS, VERDICT_NOT_SUPPORTED, VERDICT_ONE_MOMENT})
+CLAIM_VERDICT_FIELDS = frozenset({"id", "verdict", "reason"})
 
 RECOMMENDATIONS = frozenset({"adopt", "adapt", "build"})
 RESEARCH_FIELDS = frozenset({
@@ -360,6 +371,7 @@ class FactProposal:
     memory: str
     note: str
     claim: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -456,9 +468,70 @@ def parse_memory_reply(raw: str) -> MemoryReply:
         where = f"fact proposal {index}"
         _exact_fields(item, FACT_PROPOSAL_FIELDS, where)
         facts.append(FactProposal(
-            _nonempty_string(item, "memory", where), _nonempty_string(item, "note", where), _nonempty_string(item, "claim", where)
+            _nonempty_string(item, "memory", where), _nonempty_string(item, "note", where), _nonempty_string(item, "claim", where), _nonempty_string(item, "title", where)
         ))
     return MemoryReply(changes, tuple(facts))
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    id: str
+    verdict: str
+    reason: str
+
+
+def parse_claim_verdicts(raw: str) -> tuple[ClaimVerdict, ...]:
+    """Exactly ``{"verdicts": [...]}``. Whether it answers every claim is the gate's question."""
+    document = _single_json_object(raw, frozenset({"verdicts"}))
+    verdicts = []
+    for index, item in enumerate(_list_of(document, "verdicts")):
+        where = f"verdict {index}"
+        _exact_fields(item, CLAIM_VERDICT_FIELDS, where)
+        verdicts.append(ClaimVerdict(
+            _nonempty_string(item, "id", where), _enum(item, "verdict", CLAIM_VERDICTS, where), _nonempty_string(item, "reason", where),
+        ))
+    return tuple(verdicts)
+
+
+VERDICT_KEPT = "kept"
+VERDICT_RAISED = "raised"
+VERDICT_LOWERED = "lowered"
+VERDICT_REFUSED = "refused"
+VERDICT_REVERSED = "reversed"
+STANCE_VERDICTS = (VERDICT_KEPT, VERDICT_RAISED, VERDICT_LOWERED, VERDICT_REFUSED, VERDICT_REVERSED)
+STANCE_VERDICT_FIELDS = frozenset({"id", "verdict", "stance", "quote_about_item", "rule_broken", "malfunction", "reason"})
+
+
+@dataclass(frozen=True)
+class StanceVerdict:
+    id: str
+    verdict: str
+    stance: str
+    quote_about_item: bool
+    rule_broken: bool
+    malfunction: bool
+    reason: str
+
+
+def _boolean(values: Mapping[str, Any], key: str, where: str) -> bool:
+    if not isinstance(values[key], bool):
+        raise SchemaError(f"{where}: {key} must be true or false")
+    return values[key]
+
+
+def parse_stance_verdicts(raw: str) -> tuple[StanceVerdict, ...]:
+    """Exactly ``{"verdicts": [...]}``. Whether it answers every stance, and whether each verdict fits
+    the stance it answers, is the caller's question."""
+    document = _single_json_object(raw, frozenset({"verdicts"}))
+    verdicts = []
+    for index, item in enumerate(_list_of(document, "verdicts")):
+        where = f"stance verdict {index}"
+        _exact_fields(item, STANCE_VERDICT_FIELDS, where)
+        verdicts.append(StanceVerdict(
+            _nonempty_string(item, "id", where), _enum(item, "verdict", frozenset(STANCE_VERDICTS), where), _enum(item, "stance", ITEM_STANCES, where),
+            _boolean(item, "quote_about_item", where), _boolean(item, "rule_broken", where), _boolean(item, "malfunction", where), _nonempty_string(item, "reason", where),
+        ))
+    return tuple(verdicts)
 
 
 def validate_proposal(values: Any, where: str) -> Proposal:

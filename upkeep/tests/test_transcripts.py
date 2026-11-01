@@ -120,7 +120,8 @@ def test_slash_command_wrapper_becomes_what_was_typed(tmp_path):
 def test_rule6_question_answer_counts_with_question_held_apart(tmp_path):
     use = tool_use("q1", "AskUserQuestion", {"questions": []})
     result = tool_result(
-        "q1", 'The user answered: "Which?"="Left"', toolUseResult={"answers": {"Which one?": "Left"}}
+        "q1", 'The user answered: "Which?"="Left"',
+        toolUseResult={"questions": [{"question": "Which one?", "options": [{"label": "Right"}]}], "answers": {"Which one?": "Left"}},
     )
     entry = [e for e in read_entries(tmp_path, [use, result]) if e.kind == t.USER_ANSWER][0]
     assert entry.text == "Left"

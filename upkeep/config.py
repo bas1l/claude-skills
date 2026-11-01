@@ -63,6 +63,8 @@ class CountsConfig:
     error_classes: tuple[tuple[str, str], ...]
     class_scan_chars: int
     signature_chars: int
+    traceback_marker: str
+    startup_noise_line_patterns: tuple[str, ...]
     shell_tools: tuple[str, ...]
 
 
@@ -84,6 +86,18 @@ class InventoryConfig:
     optional_settings_files: tuple[str, ...]
     plugins_manifest: str
     user_config: str
+    installed_plugins_file: str
+
+
+@dataclass(frozen=True)
+class ItemCheckConfig:
+    """The list of known names each chunk is read with, and the call that checks stances."""
+
+    listing_description_chars: int
+    model: str
+    item_chars: int
+    group_chars: int
+    earlier_rulings_shown: int
 
 
 @dataclass(frozen=True)
@@ -91,6 +105,8 @@ class LedgerConfig:
     direct_against_entries: int
     inferred_against_entries: int
     inferred_window_days: int
+    rename_name_overlap: float
+    rename_flag_days: int
     stated_limit_patterns: tuple[str, ...]
     origin_tools: tuple[str, ...]
 
@@ -105,7 +121,13 @@ class WeeklyConfig:
     failures_shown: int
     max_deletions_per_pass: int
     quote_failure_batch_min: int
-    said_quote_shared_word_letters: int
+    verification_model: str
+    said_quote_min_words: int
+    reaction_quote_min_words: int
+    assistant_statement_min_words: int
+    tied_shared_words_min: int
+    tied_word_min_letters: int
+    tied_ignored_words: tuple[str, ...]
     group_chars: int
     source_assistant_chars: int
     claim_max_chars: int
@@ -113,6 +135,14 @@ class WeeklyConfig:
     index_hook_chars: int
     reproposal_word_overlap: float
     memory_excluded_origins: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class StatusConfig:
+    """Read by the hook and the entry script, which take it from the JSON directly."""
+
+    warn_after_hours_without_run: int
+    unreadable_lock_grace_seconds: int
 
 
 @dataclass(frozen=True)
@@ -178,7 +208,9 @@ class Config:
     memory: MemoryConfig
     secrets: SecretsConfig
     inventory: InventoryConfig
+    item_check: ItemCheckConfig
     ledger: LedgerConfig
+    status: StatusConfig
     weekly: WeeklyConfig
     research: ResearchConfig
     review: ReviewConfig
@@ -218,7 +250,9 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("memory", MemoryConfig),
         ("secrets", SecretsConfig),
         ("inventory", InventoryConfig),
+        ("item_check", ItemCheckConfig),
         ("ledger", LedgerConfig),
+        ("status", StatusConfig),
         ("weekly", WeeklyConfig),
         ("research", ResearchConfig),
         ("review", ReviewConfig),
@@ -248,6 +282,8 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
             error_classes=tuple((name, pattern) for name, pattern in counts["error_classes"]),
             class_scan_chars=counts["class_scan_chars"],
             signature_chars=counts["signature_chars"],
+            traceback_marker=counts["traceback_marker"],
+            startup_noise_line_patterns=tuple(counts["startup_noise_line_patterns"]),
             shell_tools=tuple(counts["shell_tools"]),
         ),
         memory=MemoryConfig(**raw["memory"]),
@@ -258,7 +294,9 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
             optional_settings_files=tuple(_expand_path(p) for p in inventory["optional_settings_files"]),
             plugins_manifest=_expand_path(inventory["plugins_manifest"]),
             user_config=_expand_path(inventory["user_config"]),
+            installed_plugins_file=_expand_path(inventory["installed_plugins_file"]),
         ),
+        item_check=ItemCheckConfig(**raw["item_check"]),
         ledger=LedgerConfig(
             **{
                 **ledger,
@@ -266,7 +304,12 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
                 "origin_tools": tuple(ledger["origin_tools"]),
             }
         ),
-        weekly=WeeklyConfig(**{**raw["weekly"], "memory_excluded_origins": tuple(raw["weekly"]["memory_excluded_origins"])}),
+        weekly=WeeklyConfig(**{
+            **raw["weekly"],
+            "memory_excluded_origins": tuple(raw["weekly"]["memory_excluded_origins"]),
+            "tied_ignored_words": tuple(raw["weekly"]["tied_ignored_words"]),
+        }),
+        status=StatusConfig(**raw["status"]),
         research=ResearchConfig(**{**raw["research"], "public_path_fragments": tuple(raw["research"]["public_path_fragments"])}),
         review=ReviewConfig(**raw["review"]),
         monthly=MonthlyConfig(**{

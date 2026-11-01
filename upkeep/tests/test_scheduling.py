@@ -7,11 +7,13 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -65,14 +67,42 @@ def test_triggers_are_at_the_planned_local_times_with_no_offset(tasks):
 
     assert times("daily") == ["01:00:00"]
     assert times("weekly") == ["02:00:00", "05:30:00"]
-    assert times("monthly") == ["03:00:00"]
+    assert times("monthly") == ["03:00:00", "09:30:00"]
 
 
-def test_monthly_definition_is_the_first_saturday_of_every_month(tasks):
-    trigger = ET.fromstring(tasks["monthly"]["xml"]).find(".//t:ScheduleByMonthDayOfWeek", TASK_NS)
-    assert [week.text for week in trigger.findall("t:Weeks/t:Week", TASK_NS)] == ["1"]
-    assert [child.tag.split("}")[1] for child in trigger.find("t:DaysOfWeek", TASK_NS)] == ["Saturday"]
-    assert len(trigger.find("t:Months", TASK_NS)) == 12
+def test_every_trigger_is_local_time_without_a_fixed_offset(tasks):
+    """A boundary with Z or +01:00 would stay on that offset and shift by an hour at daylight saving."""
+    for task in tasks.values():
+        written = [item.text for item in ET.fromstring(task["xml"]).findall(".//t:CalendarTrigger/t:StartBoundary", TASK_NS)]
+        read_back = [item["start_boundary"] for item in task["checked"]["triggers"]]
+        assert written and written == read_back
+        assert all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", boundary) for boundary in written), written
+
+
+def test_monthly_definition_is_the_first_saturday_of_every_month_twice(tasks):
+    triggers = ET.fromstring(tasks["monthly"]["xml"]).findall(".//t:ScheduleByMonthDayOfWeek", TASK_NS)
+    assert len(triggers) == 2
+    for trigger in triggers:
+        assert [week.text for week in trigger.findall("t:Weeks/t:Week", TASK_NS)] == ["1"]
+        assert [child.tag.split("}")[1] for child in trigger.find("t:DaysOfWeek", TASK_NS)] == ["Saturday"]
+        assert len(trigger.find("t:Months", TASK_NS)) == 12
+    assert tasks["monthly"]["schedule"] == "first Saturday of each month at 03:00 and 09:30"
+
+
+def test_monthly_retry_starts_after_the_first_run_is_over_its_limit(tasks):
+    """The policy is IgnoreNew, so a retry starting while the first run still goes would be dropped."""
+    first, retry = [datetime.fromisoformat(item["start_boundary"]) for item in tasks["monthly"]["checked"]["triggers"]]
+    assert tasks["monthly"]["checked"]["execution_time_limit"] == "PT6H"
+    assert retry - first > timedelta(hours=6)
+
+
+def test_a_missed_start_runs_when_the_pc_is_back_and_a_sleeping_pc_is_woken(tasks):
+    """The definition only. Whether Windows acts on it needs a real night with the PC asleep and off."""
+    for task in tasks.values():
+        settings = ET.fromstring(task["xml"]).find(".//t:Settings", TASK_NS)
+        assert settings.find("t:StartWhenAvailable", TASK_NS).text == "true"
+        assert settings.find("t:WakeToRun", TASK_NS).text == "true"
+        assert settings.find("t:DisallowStartIfOnBatteries", TASK_NS).text == "false"
 
 
 def test_weekly_definition_is_wednesday_twice(tasks):
@@ -143,7 +173,10 @@ def hook_tree(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"paths": {"data_dir": str(data)}}), encoding="utf-8")
+    config.write_text(json.dumps({
+        "paths": {"data_dir": str(data), "local_settings": str(data / "local.json")},
+        "status": {"warn_after_hours_without_run": 50, "unreadable_lock_grace_seconds": 60},
+    }), encoding="utf-8")
     return config, data / "failure-marker.json"
 
 
@@ -229,13 +262,94 @@ def test_hook_reads_a_marker_written_by_the_entry_script(tmp_path):
     data.mkdir()
     (data / "run").mkdir()
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"paths": {
-        "data_dir": str(data), "run_dir": str(data / "run"), "local_settings": str(data / "absent.json"),
-    }}), encoding="utf-8")
+    config.write_text(json.dumps({
+        "paths": {"data_dir": str(data), "run_dir": str(data / "run"), "local_settings": str(data / "absent.json")},
+        "status": {"warn_after_hours_without_run": 50, "unreadable_lock_grace_seconds": 60},
+    }), encoding="utf-8")
     for _ in range(2):
         assert pwsh("-File", str(UPKEEP / "Invoke-Upkeep.ps1"), "-Pass", "daily", "-ConfigPath", str(config)).returncode == 1
     line = json.loads(run_hook(config).stdout)["systemMessage"]
     assert "daily failed x2" in line
+
+
+def write_runs(data, *ages_hours):
+    """runs.jsonl with one line per age, as the entry script writes it."""
+    logs = data / "logs"
+    logs.mkdir(exist_ok=True)
+    lines = []
+    for age in ages_hours:
+        run_id = (datetime.now() - timedelta(hours=age)).strftime("%Y%m%d-%H%M%S")
+        lines.append(json.dumps({"run_id": run_id, "pass": "daily", "exit_code": 0, "wall_seconds": 1, "status": "ok"}))
+    (logs / "runs.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def stale_tree(tmp_path, hours=50):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "local.json").write_text("{}", encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "paths": {"data_dir": str(data), "local_settings": str(data / "local.json")},
+        "status": {"warn_after_hours_without_run": hours, "unreadable_lock_grace_seconds": 60},
+    }), encoding="utf-8")
+    return config, data
+
+
+def test_hook_warns_when_the_last_run_is_too_old(tmp_path):
+    config, data = stale_tree(tmp_path)
+    write_runs(data, 90, 60)
+    completed = run_hook(config)
+    message = json.loads(completed.stdout)["systemMessage"]
+    assert completed.returncode == 0 and message.startswith("Upkeep warning:")
+    assert "60 hours" in message
+    assert len(completed.stdout.strip().splitlines()) == 1
+
+
+def test_hook_is_silent_when_a_run_is_recent(tmp_path):
+    config, data = stale_tree(tmp_path)
+    write_runs(data, 90, 2)
+    assert run_hook(config).stdout == ""
+
+
+def test_hook_is_silent_before_the_first_run(tmp_path):
+    config, data = stale_tree(tmp_path)
+    assert run_hook(config).stdout == ""
+    (data / "logs").mkdir()
+    (data / "logs" / "runs.jsonl").write_text("", encoding="utf-8")
+    assert run_hook(config).stdout == ""
+
+
+def test_hook_is_silent_when_upkeep_is_not_installed(tmp_path):
+    config, data = stale_tree(tmp_path)
+    write_runs(data, 90)
+    (data / "local.json").unlink()
+    assert run_hook(config).stdout == ""
+
+
+def test_hook_gives_one_line_with_both_a_marker_and_an_old_run(tmp_path):
+    config, data = stale_tree(tmp_path)
+    write_runs(data, 60)
+    write_marker(data / "failure-marker.json", [entry()])
+    lines = run_hook(config).stdout.strip().splitlines()
+    assert len(lines) == 1
+    message = json.loads(lines[0])["systemMessage"]
+    assert "weekly failed" in message and "60 hours" in message
+
+
+def test_hook_reports_a_broken_run_log_as_broken(tmp_path):
+    config, data = stale_tree(tmp_path)
+    (data / "logs").mkdir()
+    (data / "logs" / "runs.jsonl").write_text("not json\n", encoding="utf-8")
+    assert "broken" in json.loads(run_hook(config).stdout)["systemMessage"]
+
+
+def test_hook_does_not_count_a_research_check_as_a_run(tmp_path):
+    config, data = stale_tree(tmp_path)
+    write_runs(data, 60)
+    recent = (datetime.now() - timedelta(hours=1)).strftime("%Y%m%d-%H%M%S")
+    with open(data / "logs" / "runs.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"run_id": recent, "pass": "research_check", "exit_code": 0, "wall_seconds": 1, "status": "ok"}) + "\n")
+    assert "60 hours" in json.loads(run_hook(config).stdout)["systemMessage"]
 
 
 def test_hook_is_wired_through_the_template_for_session_start():

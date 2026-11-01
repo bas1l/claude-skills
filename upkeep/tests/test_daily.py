@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from conftest import CWD, SESSION_ID, assistant_text, human, synthetic_inventory, user_with_origin, write_jsonl
+from conftest import CWD, SESSION_ID, assistant_text, human, synthetic_inventory, user_with_origin, write_jsonl, stance_reply
 
 import daily
 import ledger
@@ -44,6 +44,13 @@ class FakeCall:
         self.calls = []
 
     def __call__(self, **kwargs):
+        if kwargs["prompt"].startswith("You are judging"):
+            # The stance check has tests of its own: here, each stance holds and costs nothing.
+            return model_call.ModelResult(
+                text=stance_reply(kwargs["stdin_text"]),
+                usage={"input_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 1},
+                model_usage={"m": {}}, cost_usd=0.0, duration_ms=1, num_turns=1, command_line=("claude",),
+            )
         self.calls.append(kwargs)
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         if isinstance(reply, BaseException):
@@ -207,8 +214,11 @@ def test_window_whose_records_changed_is_discarded_and_read_again_without_duplic
     item = ledger.ItemId(ledger.project_scope("proj"), "memory", "a-memory")
     assert len(ledger.load_ledger(ledgers_dir, item)["entries"]) == 1
 
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps({**human("a late record", 5), "sessionId": SESSION_ID}) + "\n")
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    lines[-1] = json.dumps({**human("a late record", 5), "sessionId": SESSION_ID}) + "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.writelines(lines)
     touch_after_fixture_times(path)
 
     second = daily.run_daily(tree, "r2", call=FakeCall(reply_of(note(endorsement_quote="a late record"))))
@@ -223,6 +233,56 @@ def test_window_whose_records_changed_is_discarded_and_read_again_without_duplic
     third = daily.run_daily(tree, "r3", call=FakeCall(reply_of()))
     assert third["sessions_selected"] == 0
     assert third["windows_reset"] == []
+
+
+def _window_with_an_entry_whose_records_then_changed(tree):
+    tree = dataclasses.replace(tree, chunking=dataclasses.replace(tree.chunking, chunk_chars=40))
+    memory = Path(tree.paths.projects_dir) / "proj" / "memory" / "a-memory.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("---\nname: a-memory\ndescription: test\n---\n\nBody.\n", encoding="utf-8")
+    path = add_session(tree, "proj", SESSION_ID, [*chat(1, "first message"), *chat(10, "second message")])
+    named = [{"kind": "memory", "name": "a-memory", "stance": "against"}]
+    first_reading = reply_of(note(what="About plums.", endorsement_quote="first message"), note(what="Old text on the item.", endorsement_quote="first message", items=named))
+    assert daily.run_daily(tree, "r1", call=FakeCall(first_reading, "not json"))["status"] == daily.STATUS_FAILED
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    lines[-1] = json.dumps({**human("a late record", 5), "sessionId": SESSION_ID}) + "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.writelines(lines)
+    touch_after_fixture_times(path)
+    return tree, named
+
+
+def test_a_window_read_again_keeps_no_entry_of_its_old_reading_when_the_notes_come_in_another_order(tree):
+    tree, named = _window_with_an_entry_whose_records_then_changed(tree)
+    ledgers_dir = ledger.ledgers_dir_of(tree.paths.data_dir)
+    item = ledger.ItemId(ledger.project_scope("proj"), "memory", "a-memory")
+    assert [entry["what"] for entry in ledger.load_ledger(ledgers_dir, item)["entries"]] == ["Old text on the item."]
+
+    new_reading = reply_of(note(what="New text on the item.", endorsement_quote="a late record", items=named), note(what="About pears.", endorsement_quote="a late record"))
+    second = daily.run_daily(tree, "r2", call=FakeCall(new_reading))
+    assert second["status"] == daily.STATUS_OK
+    assert second["windows_reset"][0]["ledger_entries_discarded"] == 1
+    assert second["item_problems"] == []
+    entries = ledger.load_ledger(ledgers_dir, item)["entries"]
+    assert entries and {entry["what"] for entry in entries} == {"New text on the item."}
+    for entry in entries:
+        document = json.loads(Path(tree.paths.data_dir, entry["source"]["notes"]).read_text(encoding="utf-8"))
+        assert document["notes"][entry["source"]["note_index"]]["what"] == entry["what"]
+
+
+def test_the_old_entries_go_before_the_old_notes_so_a_failure_leaves_the_notes_in_place(tree, monkeypatch):
+    tree, _ = _window_with_an_entry_whose_records_then_changed(tree)
+    before = notes_on_disk(tree)
+
+    def cannot_discard(*arguments):
+        raise ledger.LedgerError("made up")
+
+    monkeypatch.setattr(ledger, "discard_entries_from_notes", cannot_discard)
+    second = daily.run_daily(tree, "r2", call=FakeCall(reply_of()))
+    assert second["status"] == daily.STATUS_FAILED
+    assert "LedgerError" in second["failed_sessions"][0]["error"]
+    assert notes_on_disk(tree) == before
 
 
 def test_window_that_still_differs_after_the_reset_fails_that_session(tree, monkeypatch):
@@ -243,11 +303,11 @@ def test_window_that_still_differs_after_the_reset_fails_that_session(tree, monk
     assert result["sessions_read"] == 1
 
 
-def test_unknown_origin_stops_run_and_leaves_session_unprocessed(tree):
+def test_unknown_origin_fails_the_run_and_leaves_session_unprocessed(tree):
     add_session(tree, "proj", SESSION_ID, [user_with_origin("from-the-future", "hello", 1)])
     result = daily.run_daily(tree, "r1", call=FakeCall(reply_of()))
     assert result["status"] == daily.STATUS_FAILED
-    assert "TranscriptFormatError" in result["stop_reason"]
+    assert "TranscriptFormatError" in result["failed_sessions"][0]["error"]
     assert daily.EXIT_CODES[result["status"]] != 0
     assert "processed_through" not in state_entries(tree)[f"proj/{SESSION_ID}"]
 
@@ -429,8 +489,22 @@ def test_a_run_with_no_mention_adds_no_entry(tree):
     assert ledger.load_ledger(ledger.ledgers_dir_of(tree.paths.data_dir), identity)["entries"] == []
 
 
-def test_a_ledger_failure_fails_the_run_and_keeps_the_notes(tree):
+def test_one_item_of_a_shape_not_known_is_listed_and_the_run_ends_failed(tree):
     write_memory(tree, "proj", "known.txt")
+    add_session(tree, "proj", SESSION_ID, chat())
+    result = daily.run_daily(tree, "r1", call=FakeCall(reply_of(note())))
+    assert result["status"] == daily.STATUS_FAILED
+    assert result["stop_reason"] is None
+    assert any("known.txt" in problem["what"] for problem in result["item_problems"])
+    assert result["ledger"] is not None
+    assert len(notes_on_disk(tree)) == 1
+
+
+def test_a_ledger_failure_fails_the_run_and_keeps_the_notes(tree, monkeypatch):
+    def broken(config, as_of):
+        raise ledger.LedgerError("made up")
+
+    monkeypatch.setattr(daily.backfill, "sync_items", broken)
     add_session(tree, "proj", SESSION_ID, chat())
     result = daily.run_daily(tree, "r1", call=FakeCall(reply_of(note())))
     assert result["status"] == daily.STATUS_FAILED

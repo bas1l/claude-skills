@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -146,12 +147,43 @@ def test_reused_process_id_is_not_live(setup):
     assert marker_of(data)["entries"][0]["kind"] == "stale_lock"
 
 
-def test_unreadable_lock_stops_the_run(setup):
+def age_lock(data, seconds=3600):
+    moment = time.time() - seconds
+    os.utime(data / "upkeep.lock", (moment, moment))
+
+
+@pytest.mark.parametrize("content", ["", "not json", '{"pass": "daily"}'])
+def test_an_old_unreadable_lock_is_reported_and_the_run_recovers(setup, content):
     config_path, data, _ = setup
-    (data / "upkeep.lock").write_text("not json", encoding="utf-8")
+    (data / "upkeep.lock").write_text(content, encoding="utf-8")
+    age_lock(data)
     completed = invoke(config_path)
-    assert completed.returncode != 0
-    assert "cannot be read" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
+    assert not (data / "upkeep.lock").exists()
+    entry, = marker_of(data)["entries"]
+    assert entry["kind"] == "stale_lock"
+    assert "could not be read" in entry["summary"]
+
+
+def test_a_config_without_the_lock_setting_still_leaves_a_marker(setup):
+    config_path, data, _ = setup
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    del raw["status"]
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    completed = invoke(config_path)
+    assert completed.returncode == 1
+    assert "unreadable_lock_grace_seconds" in marker_of(data)["entries"][0]["summary"]
+
+
+def test_a_fresh_unreadable_lock_may_be_a_run_starting_so_it_waits_and_says_so(setup):
+    config_path, data, _ = setup
+    (data / "upkeep.lock").write_text("", encoding="utf-8")
+    completed = invoke(config_path)
+    assert completed.returncode == 2
+    assert (data / "upkeep.lock").exists()
+    entry, = marker_of(data)["entries"]
+    assert entry["kind"] == "failed"
+    assert "could not be read" in entry["summary"]
 
 
 def test_missing_interpreter_fails_loudly(setup):
@@ -208,6 +240,39 @@ def test_monthly_pass_runs_writes_its_results_and_does_nothing_on_a_retry(setup,
     assert len(list((data / "logs").glob("monthly-*.result.json"))) >= 1
 
 
+def test_a_failed_monthly_pass_is_retried_clears_its_warning_and_the_third_run_does_nothing(setup, tmp_path):
+    config_path, data, projects = setup
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    instructions = tmp_path / "CLAUDE.md"
+    instructions.write_text("# Style\n\nWrite plainly.\n", encoding="utf-8")
+    raw["monthly"]["global_claude_file"] = str(instructions)
+    raw["monthly"]["global_rules_dir"] = str(tmp_path / "rules")
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    (data / "local.json").write_text(json.dumps({"python_exe": sys.executable, "apply_memory_changes": False, "private_terms": []}), encoding="utf-8")
+    memory = projects / "proj" / "memory"
+    memory.mkdir(parents=True)
+    (memory / "a-memory.md").write_text("---\nname: a-memory\ndescription: test\n---\n\nWrite in short sentences.\n", encoding="utf-8")
+
+    set_fake_reply(tmp_path, "not a result")
+    assert invoke(config_path, "monthly").returncode == 1
+    entry = marker_of(data)["entries"][0]
+    assert entry["kind"] == "failed" and entry["pass"] == "monthly"
+    assert not list((data / "reports" / "monthly").glob("*.json"))
+
+    set_fake_reply(tmp_path, json.dumps({**FAKE_RESULT, "result": '{"contradictions": [], "stale": [], "level_moves": []}'}))
+    retry = invoke(config_path, "monthly")
+    assert retry.returncode == 0, retry.stderr
+    assert marker_of(data) is None
+    assert len(list((data / "reports" / "monthly").glob("*.json"))) == 1
+
+    # A call now would fail, so exit 0 and "skipped" show that no call was made.
+    set_fake_reply(tmp_path, "not a result")
+    assert invoke(config_path, "monthly").returncode == 0
+    last = sorted((data / "logs").glob("monthly-*.result.json"))[-1]
+    assert json.loads(last.read_text(encoding="utf-8"))["skipped"] is True
+    assert marker_of(data) is None
+
+
 def test_weekly_pass_runs_writes_its_report_and_does_nothing_on_a_retry(setup):
     config_path, data, projects = setup
     (data / "local.json").write_text(
@@ -239,7 +304,8 @@ def test_unknown_origin_gives_non_zero_exit_and_a_marker_then_clears_on_a_clean_
     assert completed.returncode == 1
     entry = marker_of(data)["entries"][0]
     assert entry["kind"] == "failed"
-    assert "TranscriptFormatError" in entry["summary"]
+    assert "TranscriptFormatError" in entry["failed_sessions"][0]["error"]
+    assert "1 sessions" in entry["summary"]
 
     add_session(projects, [human("hello", 1), assistant_text("Hi.", 2)])
     assert invoke(config_path).returncode == 0

@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence
 
+import ledger
 import render
 import schemas
 import sessions
 import transcripts
 from config import Config, WeeklyConfig
 
-_SOURCE_KINDS = transcripts.USER_OWN_KINDS | {transcripts.ASSISTANT_TEXT}
+_SOURCE_KINDS = transcripts.USER_REACTION_KINDS | {transcripts.ASSISTANT_TEXT}
 _PROPOSAL_ROUTES = frozenset({"skill", "hook", "mcp", "global_rule", "script_count"})
 _PROPOSAL_TYPES = frozenset({"failure", "procedure"})
 ONE_MOMENT_ORDER = "one_moment_order"
@@ -41,6 +42,7 @@ class Window:
     after: datetime
     through: datetime
     files: sessions.SessionFiles
+    lines: Optional[transcripts.LineWindow] = None
 
 
 @dataclass(frozen=True)
@@ -122,11 +124,20 @@ def load_windows(
             after=datetime.fromisoformat(recorded["after"]),
             through=through,
             files=files,
+            lines=_lines_of(recorded),
         )
         windows.append(window)
         for chunk_path in chunk_paths:
             records.extend(_records_of_chunk(chunk_path, window, os.path.dirname(notes_root)))
     return records, windows, skipped
+
+
+def _lines_of(recorded: Mapping[str, Any]) -> Optional[transcripts.LineWindow]:
+    """A window by line, or None for one written when windows were by time, read as it was then."""
+    if "lines_through" not in recorded:
+        return None
+    floor = None if recorded["floor"] is None else datetime.fromisoformat(recorded["floor"])
+    return transcripts.LineWindow(recorded["lines_after"], recorded["lines_through"], floor)
 
 
 def _records_of_chunk(path: str, window: Window, data_dir: str) -> list[NoteRecord]:
@@ -135,17 +146,27 @@ def _records_of_chunk(path: str, window: Window, data_dir: str) -> list[NoteReco
     if version not in (schemas.NOTES_SCHEMA_WITHOUT_ITEMS, schemas.NOTES_SCHEMA_VERSION):
         raise ValueError(f"{path}: notes schema version {version!r}")
     relative = os.path.relpath(path, data_dir).replace(os.sep, "/")
+    checks = ledger.read_stance_checks(os.path.dirname(path))
     return [
         NoteRecord(
             window=window,
             values=note,
-            items=() if version == schemas.NOTES_SCHEMA_WITHOUT_ITEMS else tuple(note["items"]),
+            items=() if version == schemas.NOTES_SCHEMA_WITHOUT_ITEMS else _items_as_judged(note["items"], os.path.basename(path), index, checks),
             source=relative,
             note_index=index,
             last=datetime.fromisoformat(document["last"]),
         )
         for index, note in enumerate(document["notes"])
     ]
+
+
+def _items_as_judged(items: Sequence[Mapping[str, Any]], chunk_file: str, note_index: int, checks: Mapping[str, Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    """Where the stance check has judged a stance, the stance it settled on is the one that counts."""
+    judged = []
+    for position, item in enumerate(items):
+        check = checks.get(ledger.stance_key(chunk_file, note_index, position))
+        judged.append(item if check is None else {**item, "stance": check["final"]})
+    return tuple(judged)
 
 
 def is_memory_note(record: NoteRecord, config: WeeklyConfig) -> bool:
@@ -166,18 +187,24 @@ def is_proposal_note(record: NoteRecord) -> bool:
     return note["route"] in _PROPOSAL_ROUTES or note["type"] in _PROPOSAL_TYPES
 
 
+def counts_files(config: Config) -> dict[str, str]:
+    """Every counts file on disk, by its key. The key has the form of a notes window's, and is kept
+    in a map of its own: a counts file is used once it is counted, whatever became of the window."""
+    counts_root = os.path.join(config.paths.data_dir, "counts")
+    paths = sorted(glob.glob(os.path.join(glob.escape(counts_root), "*", "*.json")))
+    return {os.path.relpath(path, counts_root).replace(os.sep, "/")[: -len(".json")]: path for path in paths}
+
+
 def aggregate_counts(
     config: Config, consumed: Mapping[str, str]
 ) -> tuple[list[FailureCount], list[ProcedureCount]]:
     """Across all unconsumed windows, by script: failures ranked by commands lost, then
     procedures at or over the threshold in one session. Only literal error starts are grouped;
     keyword class hints are never counted."""
-    counts_root = os.path.join(config.paths.data_dir, "counts")
     lost: collections.Counter[tuple[str, str]] = collections.Counter()
     seen_in: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
     procedures: collections.Counter[tuple[str, str]] = collections.Counter()
-    for path in sorted(glob.glob(os.path.join(glob.escape(counts_root), "*", "*.json"))):
-        key = os.path.relpath(path, counts_root).replace(os.sep, "/")[: -len(".json")]
+    for key, path in counts_files(config).items():
         if key in consumed:
             continue
         document = _read_json(path)
@@ -228,7 +255,7 @@ class SourceStore:
             files = window.files
             self._entries[window.key] = [
                 entry
-                for entry in transcripts.iter_session_entries(files.main_path, files.subagent_paths, window.after, window.through)
+                for entry in transcripts.iter_session_entries(files.main_path, files.subagent_paths, window.after, window.through, window.lines)
                 if entry.kind in _SOURCE_KINDS
             ]
         return self._entries[window.key]
@@ -237,6 +264,33 @@ class SourceStore:
         return render.render_exchanges(
             self.entries(window), self._config.cuts, self._config.secrets, self._config.weekly.source_assistant_chars
         )
+
+
+def set_aside_unreadable(
+    records: Sequence[NoteRecord], windows: Sequence[Window], store: SourceStore, config: WeeklyConfig
+) -> tuple[list[NoteRecord], list[Window], list[dict[str, str]]]:
+    """A window whose source cannot be read any more waits, listed, and the others go on."""
+    needed = {record.window.key: record.window for record in records if is_memory_note(record, config)}
+    set_aside: dict[str, str] = {}
+    for key, window in needed.items():
+        try:
+            store.entries(window)
+        except transcripts.TranscriptFormatError as error:
+            set_aside[key] = str(error)
+    return (
+        [record for record in records if record.window.key not in set_aside],
+        [window for window in windows if window.key not in set_aside],
+        [{"window": key, "reason": reason} for key, reason in set_aside.items()],
+    )
+
+
+def one_moment_quotes(records: Sequence[NoteRecord]) -> dict[str, list[str]]:
+    """By window, what the reading of a session marked as an order tied to the task at hand."""
+    found: dict[str, list[str]] = {}
+    for record in records:
+        if record.values["type"] == ONE_MOMENT_ORDER and record.values["endorsement_quote"].strip():
+            found.setdefault(record.window.key, []).append(record.values["endorsement_quote"])
+    return found
 
 
 def render_note(ref: str, session_ref: str, record: NoteRecord) -> str:
@@ -328,6 +382,6 @@ def latest_decision_for(
         for decision in decisions
         if decision["scope"] == scope
         and decision["kind"] == kind
-        and ((decision["name"] == name and decision["action"] == action) or word_overlap(decision["claim"], claim) >= overlap)
+        and ((decision["name"].casefold() == name.casefold() and decision["action"] == action) or word_overlap(decision["claim"], claim) >= overlap)
     ]
     return max(matches, key=lambda decision: datetime.fromisoformat(decision["decided_at"])) if matches else None

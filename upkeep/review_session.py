@@ -12,9 +12,16 @@ number that does not exist, or a review that has changed, is refused by code and
     approve-skill N [--folder F] create a branch of the skills repository from the draft
     approve-memory N             write an approved fact or removal into the memory, by a new commit
     record-approved N --detail T record a change applied in the session after Basil confirmed it
+    read-again                   Basil reloaded the page and it shows this version: numbers are from it now
 
-All but show, item, why and check-draft need ``--review <review_id>``, which ``show`` prints, and
-``--session <id>``. A refusal prints its reason and exits 2.
+All but show, item, why and check-draft need ``--review <review_id>``, which ``show`` prints and the
+page shows as its version, and ``--session <id>``. A refusal prints its reason and exits 2.
+
+A number means something only on the page it was read from, and that page may be open in a browser
+while a pass builds a new review. So a session stays on the version of its first action. If the
+review moves on, reading it again is not enough: every action is refused until ``read-again``, which
+the skill runs only after Basil says he reloaded the page. What script can tell ends there: it cannot
+see his browser, and a new session starts on the current version, whichever page he has open.
 
 Undo and reject add an entry against to the item's ledger if it has one, and always a decision in
 ``ledgers/review-decisions.json``. A new skill that was never made has no ledger, so the decision
@@ -36,6 +43,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
+import extract
 import ledger
 import memory_store
 import render
@@ -60,6 +68,37 @@ MANIFEST_KINDS = frozenset({"plugin", "mcp"})
 
 class ReviewRefused(ValueError):
     """The action cannot go ahead, for a reason Basil should be told."""
+
+
+def _version_path(config: Config, session: str) -> str:
+    return os.path.join(config.paths.data_dir, "review", "page-versions", f"{_digest('session', session)}.json")
+
+
+def _check_page_version(config: Config, session: str, review_id: str) -> None:
+    """A session stays on the page version of its first action, until Basil has reloaded the page."""
+    path = _version_path(config, session)
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        extract.write_json_atomic(path, {"review_id": review_id})
+        return
+    with open(path, encoding="utf-8") as handle:
+        held = json.load(handle)["review_id"]
+    if held != review_id:
+        raise ReviewRefused(
+            f"This session took its numbers from page version {held}, and the action is for version {review_id}. The numbers may mean other items now. "
+            f"Ask Basil to reload the page and to say when it shows version {review_id}, then run read-again. Nothing was changed."
+        )
+
+
+def read_again(config: Config, session: str, review_id: str) -> dict[str, Any]:
+    """Basil has the current page in front of him, so numbers are read from it from now on."""
+    current = review_data.latest_review(config.paths.data_dir)["review_id"]
+    if review_id != current:
+        raise ReviewRefused(f"The review is at version {current}, not {review_id}. Nothing was changed.")
+    path = _version_path(config, session)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    extract.write_json_atomic(path, {"review_id": review_id})
+    return {"page_version": review_id, "notice": "Numbers are read from this version of the page now."}
 
 
 def _item_for(review: Mapping[str, Any], number: int) -> dict[str, Any]:
@@ -103,7 +142,7 @@ def _decision_fields(item: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
         return ledger.project_scope(record["project_folder"]), ledger.KIND_MEMORY, record["memory"], record["action"], record["claim"]
     kind = record["kind"]
     wording = f"{record['title']} {record['what']}"
-    if kind == review_data.KIND_MEMORY_FACT:
+    if kind in (review_data.KIND_MEMORY_FACT, review_data.KIND_MEMORY_SPLIT):
         return ledger.project_scope(record["project_folder"]), ledger.KIND_MEMORY, record["target"], weekly_gate.ACTION_FACT, record["exact_change"]
     if kind == review_data.KIND_MEMORY_DELETION:
         action, memory, _ = review_data.deletion_parts(record["exact_change"])
@@ -142,8 +181,12 @@ def _record_against(config: Config, review: Mapping[str, Any], item: Mapping[str
 
 
 def _close(config: Config, review: dict[str, Any], item: dict[str, Any], outcome: str, detail: str, now: datetime) -> dict[str, Any]:
-    """Write the decision into review.json, render the page again, commit the data folder."""
+    """Write the decision into review.json, bring the ledgers shown up to date, render the page
+    again, commit the data folder."""
     item["decision"] = {"outcome": outcome, "at": now.isoformat(), "detail": detail}
+    ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
+    for other in review["items"]:
+        other["ledger"] = review_data.ledger_summary(ledgers_dir, other["section"], other["record"])
     return _save(config, review, item, f"Review {review['week']}: item {item['number']} {outcome}", now, outcome, detail)
 
 
@@ -227,9 +270,14 @@ def undo(config: Config, review_id: str, number: int, session: str, now: datetim
         raise ValueError(f"item {number}: applied, but it holds no commit")
     folder = os.path.join(config.paths.projects_dir, record["project_folder"], "memory")
     message = f"Undo upkeep change {record['id']} of {item['week']}: {item['title']}"
+    file_name = f"{record['memory']}.md"
     try:
-        outcome = memory_store.undo_change(folder, f"{record['memory']}.md", record["before"], record["after"], record["commit"], config.memory, message)
-    except memory_store.UndoConflictError as error:
+        # The record holds these redacted, so the real text comes from the commit.
+        before, after = memory_store.exact_change_texts(
+            folder, file_name, record["commit"], record["before"], record["after"], lambda text: render.redact_secrets(text, config.secrets)
+        )
+        outcome = memory_store.undo_change(folder, file_name, before, after, record["commit"], config.memory, message)
+    except memory_store.MemoryStoreError as error:
         raise ReviewRefused(f"Item {number} was not undone, and nothing changed. {error}") from error
     recorded = _record_against(config, review, item, ledger.DECISION_UNDONE, session, now)
     commit = outcome["commit"]
@@ -415,7 +463,7 @@ def approve_memory(config: Config, review_id: str, number: int, now: datetime) -
     kind = record["kind"]
     folder = os.path.join(config.paths.projects_dir, record["project_folder"], "memory")
     message = f"Reviewed change of {review['week']}: {item['title']}"
-    if kind == review_data.KIND_MEMORY_FACT:
+    if kind in (review_data.KIND_MEMORY_FACT, review_data.KIND_MEMORY_SPLIT):
         name = record["target"]
         file_name = f"{name}.md"
         claim = record["exact_change"]
@@ -479,8 +527,11 @@ def _run(arguments: argparse.Namespace, config: Config, now: datetime) -> dict[s
         return check_draft(config, arguments.number, arguments.folder)
     if not arguments.review:
         raise ReviewRefused(f"{action} needs --review, which show prints.")
-    if action in ("undo", "reject") and not arguments.session:
+    if not arguments.session:
         raise ReviewRefused(f"{action} needs --session, the id of this review session.")
+    if action == "read-again":
+        return read_again(config, arguments.session, arguments.review)
+    _check_page_version(config, arguments.session, arguments.review)
     if action == "undo":
         return undo(config, arguments.review, arguments.number, arguments.session, now)
     if action == "reject":
@@ -500,7 +551,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("show", "item", "why", "check-draft", "undo", "reject", "keep", "skip", "approve-skill", "approve-memory", "record-approved"))
+    parser.add_argument("action", choices=("show", "item", "why", "check-draft", "undo", "reject", "keep", "skip", "approve-skill", "approve-memory", "record-approved", "read-again"))
     parser.add_argument("number", nargs="?", type=int)
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--review")
@@ -508,7 +559,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--folder")
     parser.add_argument("--detail", default="")
     arguments = parser.parse_args(argv)
-    if arguments.action != "show" and arguments.number is None:
+    if arguments.action not in ("show", "read-again") and arguments.number is None:
         parser.error(f"{arguments.action} needs an item number")
     try:
         result = _run(arguments, load_config(arguments.config), datetime.now(timezone.utc))

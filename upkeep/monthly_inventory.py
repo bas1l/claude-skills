@@ -8,6 +8,10 @@ start of the memory index, up to set limits in lines and bytes. Skill names and 
 listed too. Plugin skills, tool server definitions, the product's own prompt and what session
 start hooks print are not measured, and the report says so.
 
+Every line is redacted, and cannot close a tag it is shown in, from the moment it is read: what a
+call sees is what a citation is checked against, and a redacted block keeps its lines, so line
+numbers stay those of the file.
+
 Duplicates are a comparison first: each memory and each section of an instructions file is a
 weighted word vector, and pairs with a cosine at or over a set value become candidates. A candidate
 counts for nothing until a reader has compared the texts.
@@ -26,8 +30,9 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import backfill
 import memory_store
+import render
 import sessions
-from config import Config
+from config import Config, SecretsConfig
 
 ROLE_GLOBAL = "global_instructions"
 ROLE_PROJECT = "project_instructions"
@@ -95,6 +100,15 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class Comparison:
+    """The result of comparing for duplicates, with the texts that were alike and yet are in no
+    candidate, because a group of them was too large to show whole."""
+
+    candidates: tuple[Candidate, ...]
+    left_out: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Group:
     """Files read together in one tool-less call."""
 
@@ -115,14 +129,31 @@ class Corpus:
     settings: SourceFile
     chain_of_folder: Mapping[str, tuple[str, ...]]
     cwd_of_folder: Mapping[str, Optional[str]]
+    unreadable_headers: tuple[dict[str, str], ...] = ()
+    pattern_matches: int = 0
 
     def all_files(self) -> tuple[SourceFile, ...]:
         return (*self.global_files, self.settings, *self.project_files, *self.memories, *self.skills)
 
 
-def _read_lines(path: str) -> tuple[str, ...]:
+def _read_text_safely(path: str, secrets: SecretsConfig) -> tuple[str, int]:
     with open(path, encoding="utf-8") as handle:
-        return tuple(handle.read().splitlines())
+        text, matches = render.redact_keeping_lines(handle.read(), secrets)
+    return render.neutralise_tags(text), matches
+
+
+def _read_lines(path: str, secrets: SecretsConfig) -> tuple[str, ...]:
+    return tuple(_read_text_safely(path, secrets)[0].splitlines())
+
+
+def _front_matter(item: SourceFile) -> tuple[dict[str, Any], str]:
+    """A file's header and body. One that cannot be read counts as having no header, and
+    ``read_corpus`` has listed it for the report."""
+    text = "\n".join(item.lines)
+    try:
+        return backfill.read_front_matter(text, item.path)
+    except backfill.InventoryError:
+        return {}, text
 
 
 def _key(path: str) -> str:
@@ -212,14 +243,25 @@ def _setting_facts(config: Config, ref: str) -> SourceFile:
         for key in config.monthly.setting_fact_keys:
             state = f"is set to {json.dumps(values[key], ensure_ascii=False)}" if key in values else "is not set"
             lines.append(f"The setting {key} {state} in {os.path.basename(path)}.")
-    return SourceFile(ref, config.inventory.settings_file, ROLE_SETTING, "", "setting facts", tuple(lines))
+    safe = render.neutralise_tags(render.redact_keeping_lines("\n".join(lines), config.secrets)[0])
+    return SourceFile(ref, config.inventory.settings_file, ROLE_SETTING, "", "setting facts", tuple(safe.splitlines()))
 
 
 def _is_feedback(lines: Sequence[str], name: str, path: str) -> bool:
-    front, _ = backfill.read_front_matter("\n".join(lines), path)
+    front, _ = _front_matter(SourceFile("", path, ROLE_MEMORY, "", name, tuple(lines)))
     metadata = front.get("metadata")
     kind = front.get("type") or (metadata.get("type") if isinstance(metadata, dict) else None)
     return kind == FEEDBACK_TYPE or name.startswith(FEEDBACK_TYPE)
+
+
+def _unreadable_headers(files: Iterable[SourceFile]) -> tuple[dict[str, str], ...]:
+    found = []
+    for item in files:
+        try:
+            backfill.read_front_matter("\n".join(item.lines), item.path)
+        except backfill.InventoryError as error:
+            found.append({"what": item.path, "detail": str(error)})
+    return tuple(found)
 
 
 def read_corpus(config: Config) -> Corpus:
@@ -231,8 +273,9 @@ def read_corpus(config: Config) -> Corpus:
         counter += 1
         return f"f{counter}"
 
+    secrets = config.secrets
     global_paths = global_chain(config)
-    global_files = tuple(SourceFile(next_ref(), path, ROLE_GLOBAL, "", os.path.basename(path), _read_lines(path)) for path in global_paths)
+    global_files = tuple(SourceFile(next_ref(), path, ROLE_GLOBAL, "", os.path.basename(path), _read_lines(path, secrets)) for path in global_paths)
     settings = _setting_facts(config, next_ref())
     chain_of_folder: dict[str, tuple[str, ...]] = {}
     cwd_of_folder: dict[str, Optional[str]] = {}
@@ -249,12 +292,12 @@ def read_corpus(config: Config) -> Corpus:
         chain_of_folder[project] = tuple(_key(path) for path in chain)
         for path in chain:
             if _key(path) not in project_files:
-                project_files[_key(path)] = SourceFile(next_ref(), path, ROLE_PROJECT, project, os.path.basename(path), _read_lines(path))
+                project_files[_key(path)] = SourceFile(next_ref(), path, ROLE_PROJECT, project, os.path.basename(path), _read_lines(path, secrets))
         for relative in memory_store.list_files(folder):
             if relative == memory_store.INDEX_FILE or not relative.endswith(".md"):
                 continue
             path = os.path.join(folder, relative)
-            lines = _read_lines(path)
+            lines = _read_lines(path, secrets)
             name = relative[: -len(".md")]
             memories.append(SourceFile(next_ref(), path, ROLE_MEMORY, project, name, lines, _is_feedback(lines, name, path)))
     skills = []
@@ -262,8 +305,13 @@ def read_corpus(config: Config) -> Corpus:
     for name in sorted(os.listdir(root)):
         path = os.path.join(root, name, SKILL_FILE)
         if os.path.isfile(path):
-            skills.append(SourceFile(next_ref(), path, ROLE_SKILL, "", name, _read_lines(path)))
-    return Corpus(global_files, tuple(project_files.values()), tuple(memories), tuple(skills), settings, chain_of_folder, cwd_of_folder)
+            skills.append(SourceFile(next_ref(), path, ROLE_SKILL, "", name, _read_lines(path, secrets)))
+    every_file = (*global_files, *project_files.values(), *memories, *skills)
+    matches = sum(_read_text_safely(item.path, secrets)[1] for item in every_file)
+    return Corpus(
+        global_files, tuple(project_files.values()), tuple(memories), tuple(skills), settings, chain_of_folder, cwd_of_folder,
+        _unreadable_headers((*memories, *skills)), matches,
+    )
 
 
 def _pack(name: str, shared: Sequence[SourceFile], blocks: Iterable[Sequence[SourceFile]], limit: int) -> list[Group]:
@@ -359,7 +407,7 @@ def render_signals(group: Group, patterns: Sequence[str]) -> str:
 def _skill_listing_chars(corpus: Corpus) -> list[dict[str, Any]]:
     listing = []
     for item in corpus.skills:
-        front, _ = backfill.read_front_matter("\n".join(item.lines), item.path)
+        front, _ = _front_matter(item)
         description = front.get("description")
         listing.append({"skill": item.name, "chars": len(item.name) + (len(description) if isinstance(description, str) else 0)})
     return listing
@@ -380,6 +428,10 @@ def _loaded_index(lines: Sequence[str], max_lines: int, max_bytes: int) -> tuple
     return len(lines), used_chars, None
 
 
+def _folder_known(cwd: Optional[str]) -> bool:
+    return cwd is not None and os.path.isdir(cwd)
+
+
 def measure_context(corpus: Corpus, config: Config) -> dict[str, Any]:
     """Characters each session starts with, per project. Tokens are an estimate at a set ratio."""
     settings = config.monthly
@@ -391,12 +443,13 @@ def measure_context(corpus: Corpus, config: Config) -> dict[str, Any]:
     projects = []
     for folder in sorted(corpus.chain_of_folder):
         index_path = os.path.join(config.paths.projects_dir, folder, "memory", memory_store.INDEX_FILE)
-        lines = _read_lines(index_path) if os.path.isfile(index_path) else ()
+        lines = _read_lines(index_path, config.secrets) if os.path.isfile(index_path) else ()
         loaded_lines, loaded_chars, first_cut = _loaded_index(lines, settings.index_lines_loaded, settings.index_bytes_loaded)
         instructions = sum(by_path[path].chars for path in corpus.chain_of_folder[folder])
         projects.append({
             "project_folder": folder,
             "cwd": corpus.cwd_of_folder[folder],
+            "folder_known": _folder_known(corpus.cwd_of_folder[folder]),
             "instructions_chars": instructions,
             "index_path": index_path,
             "index_lines": len(lines),
@@ -405,7 +458,8 @@ def measure_context(corpus: Corpus, config: Config) -> dict[str, Any]:
             "index_first_line_cut": first_cut,
             "total_chars": global_chars + listing_chars + instructions + loaded_chars,
         })
-    totals = [project["total_chars"] for project in projects]
+    # With no known folder, its instructions cannot be found, and 0 would pull the typical figure down.
+    totals = [project["total_chars"] for project in projects if project["folder_known"]]
     largest = sorted(
         [
             *({"what": f"global instructions: {entry['path']}", "chars": entry["chars"]} for entry in global_entries),
@@ -421,7 +475,7 @@ def measure_context(corpus: Corpus, config: Config) -> dict[str, Any]:
         "skill_listing_chars": listing_chars,
         "skills_listed": len(listing),
         "projects": projects,
-        "projects_without_a_known_folder": sum(1 for project in projects if project["cwd"] is None),
+        "projects_without_a_known_folder": sum(1 for project in projects if not project["folder_known"]),
         "median_chars": int(statistics.median(totals)) if totals else None,
         "max_chars": max(totals) if totals else None,
         "tokens_estimate_ratio": settings.chars_per_token_estimate,
@@ -449,7 +503,7 @@ def _body_words(unit: Unit) -> list[str]:
     memory look alike, so its frontmatter counts only for its description."""
     text = unit.text()
     if unit.source.role == ROLE_MEMORY:
-        front, body = backfill.read_front_matter(text, unit.source.path)
+        front, body = _front_matter(unit.source)
         description = front.get("description")
         text = f"{description if isinstance(description, str) else ''}\n{body}"
     return _WORD_RE.findall(text.lower())
@@ -500,8 +554,13 @@ def _clusters(size: int, edges: Sequence[tuple[int, int]]) -> list[list[int]]:
 
 
 def duplicate_candidates(corpus: Corpus, config: Config) -> list[Candidate]:
+    return list(compare_for_duplicates(corpus, config).candidates)
+
+
+def compare_for_duplicates(corpus: Corpus, config: Config) -> Comparison:
     """Groups of texts alike by cosine, or memories of one name in two folders. Two sections of one
-    file are not compared. A group over the size limit is split by raising the bar inside it."""
+    file are not compared. A group over the size limit is split by raising the bar inside it, which
+    can leave texts in no group: those are named in the result."""
     settings = config.monthly
     units = _units(corpus, settings.duplicate_section_min_words)
     scores = _similar_pairs(_vectors(units))
@@ -534,14 +593,16 @@ def duplicate_candidates(corpus: Corpus, config: Config) -> list[Candidate]:
 
     every = sorted({node for pair in [*edges, *named] for node in pair})
     candidates = []
-    for position, group in enumerate(sorted(split(every, settings.duplicate_cosine_min), key=lambda nodes: nodes[0]), 1):
+    chosen = sorted(split(every, settings.duplicate_cosine_min), key=lambda nodes: nodes[0])
+    for position, group in enumerate(chosen, 1):
         inside = set(group)
         best = max((score for pair, score in {**named, **edges}.items() if pair[0] in inside and pair[1] in inside), default=0.0)
         candidates.append(Candidate(
             f"c{position}", tuple(units[node] for node in group), round(best, 3),
             any(pair[0] in inside and pair[1] in inside for pair in named),
         ))
-    return candidates
+    shown = {node for group in chosen for node in group}
+    return Comparison(tuple(candidates), tuple(units[node].label for node in every if node not in shown))
 
 
 def render_candidate(candidate: Candidate) -> str:
@@ -567,7 +628,7 @@ def pack_candidates(candidates: Sequence[Candidate], limit: int) -> list[list[Ca
 
 def skill_opening(item: SourceFile, chars: int) -> dict[str, str]:
     """What a skill says it is, for writing a general description of the need it meets."""
-    front, body = backfill.read_front_matter("\n".join(item.lines), item.path)
+    front, body = _front_matter(item)
     description = front.get("description")
     return {"skill": item.name, "description": description if isinstance(description, str) else "", "opening": body[:chars]}
 

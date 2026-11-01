@@ -22,6 +22,7 @@ import tempfile
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import backfill
 import counts as counts_module
 import model_call
 import quotes
@@ -47,9 +48,14 @@ class WindowMismatchError(ValueError):
 def write_json_atomic(path: str, document: Mapping[str, Any]) -> None:
     directory = os.path.dirname(path)
     descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".part-", suffix=".tmp")
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(document, handle, ensure_ascii=False, indent=1)
-    os.replace(temporary, path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=1)
+        os.replace(temporary, path)
+    except BaseException:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+        raise
 
 
 def read_prompt() -> str:
@@ -64,7 +70,8 @@ def chunk_file_name(number: int) -> str:
 def quote_check_of(note: schemas.Note, entries: Sequence[transcripts.Entry]) -> str:
     if note.endorsement not in schemas.ENDORSEMENTS_WITH_QUOTE:
         return QUOTE_NONE
-    return QUOTE_VERIFIED if quotes.quote_is_in_user_entries(note.endorsement_quote, entries) else QUOTE_NOT_FOUND
+    accepted = note.endorsement != schemas.ENDORSED_SAID
+    return QUOTE_VERIFIED if quotes.quote_is_in_user_entries(note.endorsement_quote, entries, accepted) else QUOTE_NOT_FOUND
 
 
 def _check_window_file(path: str, document: Mapping[str, Any]) -> None:
@@ -89,15 +96,30 @@ def _validated_chunk_on_disk(path: str, chunk: render.Chunk) -> dict[str, Any]:
 
 
 def redact_value(value: Any, config: Config) -> tuple[Any, int]:
-    """A JSON-ready value with secret patterns replaced in every string, and the match count."""
+    """A JSON-ready value with secret patterns replaced in every string and every key, and the
+    match count. Counts under keys that become one are added up; other values stay apart."""
     if isinstance(value, str):
         return render.redact_counted(value, config.secrets)
     if isinstance(value, list):
         pairs = [redact_value(item, config) for item in value]
         return [item for item, _ in pairs], sum(count for _, count in pairs)
     if isinstance(value, dict):
-        pairs = {key: redact_value(item, config) for key, item in value.items()}
-        return {key: pair[0] for key, pair in pairs.items()}, sum(pair[1] for pair in pairs.values())
+        redacted: dict[str, Any] = {}
+        total = 0
+        for key, item in value.items():
+            new_key, key_matches = redact_value(key, config)
+            new_item, item_matches = redact_value(item, config)
+            total += key_matches + item_matches
+            if new_key not in redacted:
+                redacted[new_key] = new_item
+            elif isinstance(new_item, int) and isinstance(redacted[new_key], int):
+                redacted[new_key] += new_item
+            else:
+                number = 2
+                while f"{new_key} ({number})" in redacted:
+                    number += 1
+                redacted[f"{new_key} ({number})"] = new_item
+        return redacted, total
     return value, 0
 
 
@@ -105,7 +127,8 @@ def counts_document(
     item: sessions.WorkItem, entries: Sequence[transcripts.Entry], config: Config, run_id: str
 ) -> tuple[dict[str, Any], int]:
     """Counts for a window, with secret patterns redacted from error signatures and the like."""
-    counted, redacted = redact_value(counts_module.count_entries(entries, config.counts), config)
+    counted, redacted = redact_value(counts_module.count_entries(entries, config.counts, config.secrets), config)
+    redacted += counted["main"]["secrets_redacted"] + counted["subagent"]["secrets_redacted"]
     return (
         {
             "session_id": item.files.session_id,
@@ -129,6 +152,14 @@ def _usage_summary(result: model_call.ModelResult) -> dict[str, Any]:
     }
 
 
+def _lines_of_window(item: sessions.WorkItem) -> dict[str, Any]:
+    """What the weekly pass needs to read this window again. A trial's whole-session window has none."""
+    if item.lines is None:
+        return {}
+    floor = None if item.lines.floor is None else item.lines.floor.isoformat()
+    return {"lines_after": dict(item.lines.after), "lines_through": dict(item.lines.through), "floor": floor}
+
+
 def extract_window(
     item: sessions.WorkItem,
     out_dir: str,
@@ -138,22 +169,26 @@ def extract_window(
     budget_usd: float,
     only_chunks: Optional[Sequence[int]] = None,
     call: Callable[..., model_call.ModelResult] = model_call.call_model,
+    *,
+    known_items: str,
 ) -> dict[str, Any]:
     """Process one window and return a summary. Raises on any invalid reply or result.
 
     ``model=None`` uses the session default. ``budget_usd`` limits this call of the
-    function; a caller holding a run budget passes what remains.
+    function; a caller holding a run budget passes what remains. ``known_items`` is the list of
+    names the reader may use, from ``backfill.known_items_text``. It is not part of a chunk's hash,
+    so an item added between two runs does not reset a window.
     """
     if item.mode != sessions.MODE_READ:
         raise ValueError(f"session {item.files.session_id}: mode {item.mode!r} is not for model reading")
     os.makedirs(out_dir, exist_ok=True)
 
     entries = list(
-        transcripts.iter_session_entries(item.files.main_path, item.files.subagent_paths, item.after, item.through)
+        transcripts.iter_session_entries(item.files.main_path, item.files.subagent_paths, item.after, item.through, item.lines)
     )
     counts_doc, counts_redacted = counts_document(item, entries, config, run_id)
     write_json_atomic(os.path.join(out_dir, "counts.json"), counts_doc)
-    user_entries = [entry for entry in entries if entry.kind in transcripts.USER_OWN_KINDS]
+    user_entries = [entry for entry in entries if entry.kind in transcripts.USER_REACTION_KINDS]
     rendered = render.render_entries(entries, config.cuts, config.secrets)
     timeline = render.build_timeline(rendered)
     chunks = render.split_into_chunks(rendered, config.chunking.chunk_chars)
@@ -167,6 +202,7 @@ def extract_window(
             "project_cwd": item.project_cwd,
             "after": item.after.isoformat(),
             "through": item.through.isoformat(),
+            **_lines_of_window(item),
             "chunk_chars": config.chunking.chunk_chars,
             "timeline_chars": len(timeline),
             "rendered_chars": sum(len(entry.text) for entry in rendered),
@@ -202,7 +238,7 @@ def extract_window(
             continue
         result = call(
             prompt=prompt,
-            stdin_text=render.chunk_input_text(chunk, timeline),
+            stdin_text=render.chunk_input_text(chunk, timeline, known_items),
             tools=(),
             model=model,
             max_budget_usd=budget_usd - spent,
@@ -236,6 +272,7 @@ def extract_window(
             "first": chunk.first_timestamp.isoformat(),
             "last": chunk.last_timestamp.isoformat(),
             "model_requested": model,
+            "known_items_chars": len(known_items),
             **_usage_summary(result),
             "secrets_redacted": notes_redacted,
             "notes": checked_notes,
@@ -302,6 +339,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         arguments.run_id,
         arguments.budget_usd,
         only_chunks=[int(number) for number in arguments.chunks.split(",")] if arguments.chunks else None,
+        known_items=backfill.known_items_text(config, item.files.project_folder),
     )
     json.dump(summary, sys.stdout, indent=1)
     print()

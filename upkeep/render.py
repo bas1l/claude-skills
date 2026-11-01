@@ -20,12 +20,13 @@ SCRIPT_ONLY_KINDS = frozenset({t.MODEL_USAGE, t.STOP_HOOK_SUMMARY, t.API_ERROR})
 
 # Kinds that make up the user's timeline, including the labelled non-own kinds, so a
 # reader of any chunk can see what the user pasted, accepted or interrupted.
-TIMELINE_KINDS = t.USER_OWN_KINDS | {t.USER_PASTED, t.USER_ACCEPTED_SUGGESTION, t.USER_INTERRUPT}
+TIMELINE_KINDS = t.USER_REACTION_KINDS | {t.USER_PASTED, t.USER_ACCEPTED_SUGGESTION, t.USER_INTERRUPT}
 
 _FIXED_LABELS = {
     t.USER_TYPED: "USER-TYPED",
     t.USER_QUEUED: "USER-TYPED-WHILE-WORKING",
     t.USER_ANSWER: "USER-ANSWER",
+    t.USER_CHOSE_OPTION: "USER-CHOSE-OPTION (model words)",
     t.USER_REJECTION: "USER-REJECTED-TOOL-CALL",
     t.USER_TO_TEAMMATE: "USER-TO-TEAMMATE",
     t.USER_PASTED: "USER-PASTED (not the user's own words)",
@@ -54,7 +55,14 @@ _TOOL_LABELS = {
     t.HOOK_OK: "HOOK-OK",
 }
 
-_ENTRY_HEADER_RE = re.compile(r"^=== \[", re.M)
+# Anywhere in a text, so that a space or a lone carriage return in front does not get it past.
+_ENTRY_HEADER_RE = re.compile(r"={3,}\s*\[")
+# Every tag a prompt frames data with. Text holding one could otherwise end its own frame.
+FRAME_TAGS = (
+    "session_part", "user_timeline", "memories", "memory", "declined", "notes", "source", "session", "existing_items",
+    "hook_settings", "failures", "procedures", "files", "file", "signals", "unit", "cluster", "known_items", "items", "item", "stances",
+)
+_FRAME_TAG_RE = re.compile(rf"<(\s*/?\s*(?:{'|'.join(FRAME_TAGS)})\b)", re.I)
 
 
 @dataclass(frozen=True)
@@ -124,11 +132,26 @@ def redact_secrets(text: str, secrets: SecretsConfig) -> str:
     return redact_counted(text, secrets)[0]
 
 
+def redact_keeping_lines(text: str, secrets: SecretsConfig) -> tuple[str, int]:
+    """Like ``redact_counted``, with as many lines as before, for text cited by line number."""
+    total = 0
+    for name, pattern in secrets.patterns:
+        label = f"[REDACTED-{name}]"
+        text, matches = re.subn(pattern, lambda match: label + "\n" * match.group(0).count("\n"), text)
+        total += matches
+    return text, total
+
+
+def neutralise_tags(text: str) -> str:
+    """Text that cannot open or close a tag its prompt frames data with."""
+    return _FRAME_TAG_RE.sub(lambda match: f"&lt;{match.group(1)}", text)
+
+
 def _clean(text: str) -> str:
-    """Make text safe to send: lone surrogates become U+FFFD, and a line in the text
-    cannot pose as an entry header."""
+    """Make text safe to send: lone surrogates become U+FFFD, and nothing in the text can pose
+    as an entry header or as a tag of the frame around it."""
     text = text.encode("utf-8", "replace").decode("utf-8")
-    return _ENTRY_HEADER_RE.sub("=== (", text)
+    return neutralise_tags(_ENTRY_HEADER_RE.sub("=== (", text))
 
 
 def is_read_by_model(entry: t.Entry) -> bool:
@@ -148,10 +171,11 @@ def render_entries(entries: Iterable[t.Entry], cuts: CutsConfig, secrets: Secret
             if prefix in seen_hook_prefixes or not entry.text.strip():
                 continue
             seen_hook_prefixes.add(prefix)
-        body = cut_text(entry.text, _limit(entry, cuts))
+        # Redaction comes before the cut, or a token across the cut would no longer match.
+        body = cut_text(redact_secrets(entry.text, secrets), _limit(entry, cuts))
         if entry.context:
-            body = f"(asked: {cut_text(entry.context, cuts.tool_chars)})\n{body}"
-        body = _clean(redact_secrets(body, secrets))
+            body = f"(asked: {cut_text(redact_secrets(entry.context, secrets), cuts.tool_chars)})\n{body}"
+        body = _clean(body)
         stamp = entry.timestamp.strftime("%Y-%m-%dT%H:%M:%S")
         rendered.append(RenderedEntry(entry.kind, entry.timestamp, f"\n=== [{_label(entry)}] {stamp}\n{body}"))
     return rendered
@@ -195,9 +219,11 @@ def split_into_chunks(rendered: list[RenderedEntry], chunk_chars: int) -> list[C
     ]
 
 
-def chunk_input_text(chunk: Chunk, timeline: str) -> str:
-    """The text one model call reads: the user's timeline, then this part of the session."""
+def chunk_input_text(chunk: Chunk, timeline: str, known_items: str) -> str:
+    """The text one model call reads: the names it may use, the user's timeline, then this part of
+    the session. What changes least comes first, and the list is the same for a project's chunks."""
     return (
+        f"<known_items>\n{neutralise_tags(known_items)}\n</known_items>\n\n"
         "<user_timeline note=\"All the user's messages in this window, for context. "
         "Covers more than this part.\">"
         f"{timeline}\n</user_timeline>\n\n"
@@ -220,7 +246,7 @@ def render_exchanges(entries: Iterable[t.Entry], cuts: CutsConfig, secrets: Secr
     for entry in render_entries(entries, cuts, secrets):
         if entry.kind == t.ASSISTANT_TEXT:
             pending = entry.text
-        elif entry.kind in t.USER_OWN_KINDS:
+        elif entry.kind in t.USER_REACTION_KINDS:
             if pending:
                 cut = len(pending) - assistant_chars
                 parts.append(pending if cut <= 0 else f"\n=== [ASSISTANT-TEXT] ...[CUT {cut} chars]\n{pending[cut:]}")

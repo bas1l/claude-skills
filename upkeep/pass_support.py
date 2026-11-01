@@ -12,6 +12,7 @@ import extract
 import memory_store
 import model_call
 import research
+import render
 import schemas
 from config import Config, LocalSettings
 
@@ -40,6 +41,7 @@ class Caller:
         self.spent_before = spent_before
         self.usage_log = os.path.join(report_dir, "usage.jsonl")
         self.totals = daily.RunTotals(os.path.join(config.paths.data_dir, "logs", "usage.jsonl"), run_id)
+        self.secrets_redacted = 0
 
     def remaining(self) -> float:
         left = self.config.model.run_budget_usd - self.spent_before - self.totals.cost_usd
@@ -54,16 +56,20 @@ class Caller:
 def cached_or_called_reply(
     path: str, prompt: str, stdin_text: str, model: str, key: str, caller: Caller, parse: Callable[[str], Any]
 ) -> Any:
-    """A tool-less call, or its reply from an earlier run if the input is the same."""
-    digest = hashlib.sha256(f"{prompt}\n{stdin_text}".encode("utf-8")).hexdigest()
+    """A tool-less call, or its reply from an earlier run if the input is the same. What is sent
+    and what is stored are redacted, and a run acts on the reply as it is stored, so that a retry
+    reusing it does the same."""
+    config = caller.config
+    sent, sent_matches = render.redact_counted(stdin_text, config.secrets)
+    digest = hashlib.sha256(f"{prompt}\n{sent}".encode("utf-8")).hexdigest()
     if os.path.exists(path):
         cached = read_json(path)
         if cached["input_sha256"] == digest:
             return parse(cached["reply"])
-    config = caller.config
+    caller.secrets_redacted += sent_matches
     result = caller.tracked(key)(
         prompt=prompt,
-        stdin_text=stdin_text,
+        stdin_text=sent,
         tools=(),
         model=model,
         max_budget_usd=caller.remaining(),
@@ -74,14 +80,19 @@ def cached_or_called_reply(
         usage_log_path=caller.usage_log,
     )
     try:
-        parsed = parse(result.text)
+        parse(result.text)
     except schemas.SchemaError:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(f"{path}.rejected", "w", encoding="utf-8") as handle:
-            handle.write(result.text)
+            handle.write(render.redact_secrets(result.text, config.secrets))
         raise
-    write_json(path, {"input_sha256": digest, "reply": result.text})
-    return parsed
+    # A parser has just accepted this as one JSON object. Redacting it as data keeps it valid,
+    # which redacting the text would not: a pattern can end inside an escape.
+    stored, reply_matches = extract.redact_value(json.loads(result.text), config)
+    caller.secrets_redacted += reply_matches
+    reply = json.dumps(stored, ensure_ascii=False)
+    write_json(path, {"input_sha256": digest, "reply": reply})
+    return parse(reply)
 
 
 def private_material(config: Config, local: LocalSettings, project_names: Iterable[str], project_folders: Iterable[str]) -> research.PrivateMaterial:

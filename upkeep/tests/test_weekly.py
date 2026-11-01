@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from conftest import SESSION_ID, assistant_text, human, synthetic_inventory, tool_result, tool_use, write_jsonl
+from conftest import SESSION_ID, assistant_text, human, synthetic_inventory, tool_result, tool_use, write_jsonl, stance_reply
 
 import daily
 import ledger
@@ -35,7 +35,7 @@ LIVE = LocalSettings("python", True, ("secretproject",))
 def note(**overrides):
     values = {
         "type": "preference", "what": "Prefers short reports.", "evidence": "USER-TYPED",
-        "memory_candidate": True, "endorsement": "said", "endorsement_quote": "keep reports short",
+        "memory_candidate": True, "endorsement": "said", "endorsement_quote": "print reports short",
         "origin_of_point": "user", "route": "memory", "confidence": "high", "items": [],
     }
     values.update(overrides)
@@ -45,7 +45,7 @@ def note(**overrides):
 def change(**overrides):
     values = {
         "action": "create", "memory": "short-reports", "note": "n1", "claim": "Reports are kept short.",
-        "old_text": "", "endorsement": "said", "quote": "keep reports short", "assistant_statement": "", "title": "Short reports",
+        "old_text": "", "endorsement": "said", "quote": "print reports short", "assistant_statement": "", "title": "Short reports",
     }
     values.update(overrides)
     return values
@@ -83,11 +83,22 @@ GOOD_ACTIVITY = (
 )
 
 
-class FakeCall:
-    """Replies by what is being asked: memory, proposals or research. Records each call."""
+def verification_reply(stdin_text, verdicts):
+    """Every claim supported, except those whose text holds a key of ``verdicts``."""
+    answers = []
+    for line in stdin_text.splitlines():
+        claim = json.loads(line)
+        verdict = next((value for key, value in verdicts.items() if key in claim["claim"]), "supports")
+        answers.append({"id": claim["id"], "verdict": verdict, "reason": "made up for a test"})
+    return json.dumps({"verdicts": answers})
 
-    def __init__(self, memory='{"changes": [], "fact_proposals": []}', proposals='{"proposals": []}', searching=None, activity=GOOD_ACTIVITY):
+
+class FakeCall:
+    """Replies by what is being asked: memory, proposals, verification or research. Records each call."""
+
+    def __init__(self, memory='{"changes": [], "fact_proposals": []}', proposals='{"proposals": []}', searching=None, activity=GOOD_ACTIVITY, verdicts=None):
         self.memory = memory
+        self.verdicts = verdicts if verdicts is not None else {}
         self.proposals = proposals
         self.searching = searching if searching is not None else research_reply()
         self.activity = activity
@@ -104,6 +115,10 @@ class FakeCall:
             reply = self.memory
         elif prompt.startswith("You are looking across"):
             reply = self.proposals
+        elif prompt.startswith("You are checking"):
+            reply = verification_reply(kwargs["stdin_text"], self.verdicts)
+        elif prompt.startswith("You are judging"):
+            reply = stance_reply(kwargs["stdin_text"])
         else:
             reply = '{"notes": []}'
         if isinstance(reply, BaseException):
@@ -152,7 +167,7 @@ def add_session(config, session_id, records, project=PROJECT):
     os.utime(path, (stamp, stamp))
 
 
-def chat(text="keep reports short", minute=1):
+def chat(text="print reports short", minute=1):
     return [human(text, minute), assistant_text("Understood.", minute + 1)]
 
 
@@ -164,8 +179,9 @@ def read_notes(config, *notes_list, session_id=SESSION_ID, records=None, project
     class Reader(FakeCall):
         def __call__(self, **kwargs):
             self.calls.append(kwargs)
+            judging = kwargs["prompt"].startswith("You are judging")
             return model_call.ModelResult(
-                text=next(calls),
+                text=stance_reply(kwargs["stdin_text"]) if judging else next(calls),
                 usage={"input_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 1},
                 model_usage={"m": {}}, cost_usd=0.1, duration_ms=1, num_turns=1, command_line=("claude",),
             )
@@ -229,11 +245,11 @@ def test_applied_change_is_one_commit_with_index_and_ledger_and_a_second_run_doe
     add_memory(tree, "other", "Other text.")
     memory_store.snapshot_all(tree.paths.projects_dir, tree.memory, "base")
     fake = FakeCall()
-    fake.memory = memory_reply(change(), change(action="add", claim="Never long reports.", title="", quote="keep reports"))
+    fake.memory = memory_reply(change(), change(action="add", claim="Never long reports, keep them short.", title=""))
     result = run(tree, LIVE, fake)
     assert result["status"] == "ok", result
     text = memory_path(tree, "short-reports").read_text(encoding="utf-8")
-    assert "Reports are kept short." in text and "Never long reports." in text
+    assert "Reports are kept short." in text and "Never long reports, keep them short." in text
     assert 'user said on' in text
     index = (memory_path(tree, "x").parent / "MEMORY.md").read_text(encoding="utf-8")
     assert "(short-reports.md)" in index
@@ -263,6 +279,23 @@ def test_a_rerun_after_a_failure_does_not_apply_a_folder_twice(tree):
     Path(state_path).unlink()
     add_memory(tree, "another", "More text.")
     result = run(tree, LIVE, FakeCall(memory=memory_reply(change(memory="another-one", title="Another"))))
+    assert result["status"] == "ok", "a folder with a recorded commit this week is passed over"
+    assert not memory_path(tree, "another-one").exists()
+    assert [item["memory"] for item in report_of(tree)["memory_changes"]] == ["short-reports"]
+    assert len([line for line in commits_in(tree) if line.startswith("Upkeep weekly")]) == 1
+
+
+def test_a_commit_of_this_week_with_no_record_stops_the_pass(tree):
+    read_notes(tree, note())
+    add_memory(tree, "other", "Other text.")
+    memory_store.snapshot_all(tree.paths.projects_dir, tree.memory, "base")
+    fake = FakeCall(memory=memory_reply(change()))
+    assert run(tree, LIVE, fake)["status"] == "ok"
+    report_dir = Path(tree.paths.data_dir) / "reports" / weekly.iso_week_of(NOW.astimezone())
+    (report_dir / "applied.json").unlink()
+    (report_dir / "report.json").unlink()
+    Path(weekly.weekly_state_path(tree)).unlink()
+    result = run(tree, LIVE, FakeCall(memory=memory_reply(change(memory="another-one", title="Another"))))
     assert result["status"] == "failed"
     assert "already holds a commit" in result["stop_reason"]
     assert not memory_path(tree, "another-one").exists()
@@ -278,8 +311,8 @@ def test_fabricated_quote_is_rejected_and_shown(tree):
 
 
 def test_real_quote_that_does_not_state_the_claim_is_rejected(tree):
-    read_notes(tree, note(), records=chat("keep for now"))
-    run(tree, DRY, FakeCall(memory=memory_reply(change(claim="The favourite list holds these names.", quote="keep for now"))))
+    read_notes(tree, note(), records=chat("leave it be"))
+    run(tree, DRY, FakeCall(memory=memory_reply(change(claim="The favourite list holds these names.", quote="leave it be"))))
     report = report_of(tree)
     assert report["memory_changes"] == []
     assert report["rejected"][0]["reason"] == weekly_gate.REJECT_QUOTE_UNRELATED
@@ -329,14 +362,15 @@ def test_all_quotes_failing_stops_the_pass_as_a_whole(tree):
 def test_accepted_needs_the_next_reaction_to_the_statement(tree):
     records = [
         assistant_text("The limit is five items.", 1),
-        human("yes do that", 2),
+        human("yes paint that", 2),
         assistant_text("Something else entirely.", 3),
-        human("thanks", 4),
+        human("thanks very much", 4),
     ]
-    read_notes(tree, note(endorsement="accepted", endorsement_quote="yes do that"), records=records)
+    read_notes(tree, note(endorsement="accepted", endorsement_quote="yes paint that"), records=records)
+    claim = "The limit is five items."
     fake = FakeCall(memory=memory_reply(
-        change(endorsement="accepted", quote="yes do that", assistant_statement="The limit is five items."),
-        change(memory="wrong-one", title="Wrong", endorsement="accepted", quote="thanks", assistant_statement="The limit is five items."),
+        change(endorsement="accepted", quote="yes paint that", assistant_statement="The limit is five items.", claim=claim),
+        change(memory="wrong-one", title="Wrong", endorsement="accepted", quote="thanks very much", assistant_statement="The limit is five items.", claim=claim),
     ))
     run(tree, DRY, fake)
     report = report_of(tree)
@@ -362,15 +396,15 @@ def test_the_sixth_deletion_becomes_a_proposal(tree):
         add_memory(tree, name, f"Text of {name}.")
     memory_store.snapshot_all(tree.paths.projects_dir, tree.memory, "base")
     deletions = [
-        change(action="delete", memory=name, title="", claim="Keep reports short, the user said.", old_text=f"Text of {name}.")
+        change(action="remove", memory=name, title="", claim="Print reports short, the user said.", old_text=f"Text of {name}.")
         for name in names
     ]
     result = run(tree, LIVE, FakeCall(memory=memory_reply(*deletions)))
     assert result["status"] == "ok", result
     for name in names[:5]:
-        assert not memory_path(tree, name).exists()
+        assert f"Text of {name}." not in memory_path(tree, name).read_text(encoding="utf-8")
     for name in names[5:]:
-        assert memory_path(tree, name).exists()
+        assert f"Text of {name}." in memory_path(tree, name).read_text(encoding="utf-8")
     report = report_of(tree)
     assert len(report["memory_changes"]) == 5
     assert [item["kind"] for item in report["proposals"]] == [weekly.KIND_MEMORY_DELETION] * 2
@@ -415,7 +449,7 @@ def test_injected_instruction_yields_no_memory(tree):
 
 
 def test_one_moment_order_never_reaches_the_memory_step_and_cannot_be_cited(tree):
-    read_notes(tree, note(type="one_moment_order", endorsement_quote="keep reports short"))
+    read_notes(tree, note(type="one_moment_order", endorsement_quote="print reports short"))
     fake = FakeCall(memory=memory_reply(change()))
     run(tree, DRY, fake)
     assert not [call for call in fake.calls if call["prompt"].startswith("You are preparing")]
@@ -428,7 +462,7 @@ def test_unendorsed_fact_goes_to_a_proposal_and_a_web_note_is_not_read(tree):
         note(type="fact", endorsement="none", endorsement_quote="", origin_of_point="tool_result", what="The tool is missing from the shell."),
         note(type="fact", endorsement="none", endorsement_quote="", origin_of_point="web", what="WEBTEXT says so."),
     )
-    fake = FakeCall(memory=memory_reply(facts=[{"memory": "env-fact", "note": "n1", "claim": "The tool is missing from the shell."}]))
+    fake = FakeCall(memory=memory_reply(facts=[{"memory": "env-fact", "note": "n1", "claim": "The tool is missing from the shell.", "title": "A made-up fact"}]))
     run(tree, LIVE, fake)
     assert not memory_path(tree, "env-fact").exists()
     report = report_of(tree)
@@ -446,7 +480,7 @@ def test_prompt_holds_notes_source_and_memories_but_not_unverified_reasons(tree)
     text = next(call for call in fake.calls if call["prompt"].startswith("You are preparing"))
     assert text["tools"] == ()
     assert "Prefers short reports." in text["stdin_text"]
-    assert "keep reports short" in text["stdin_text"]
+    assert "print reports short" in text["stdin_text"]
     assert "verified founding reason" not in text["stdin_text"]
 
 
@@ -678,7 +712,7 @@ def test_two_proposals_on_one_target_get_their_own_ids_and_folders(tree):
 
 def test_two_facts_on_one_memory_get_their_own_ids(tree):
     read_notes(tree, note(endorsement="none", endorsement_quote=""))
-    facts = [{"memory": "a-memory", "note": "n1", "claim": "The first fact."}, {"memory": "a-memory", "note": "n1", "claim": "The second fact."}]
+    facts = [{"memory": "a-memory", "note": "n1", "claim": "The first fact.", "title": "A made-up fact"}, {"memory": "a-memory", "note": "n1", "claim": "The second fact.", "title": "A made-up fact"}]
     run(tree, DRY, FakeCall(memory=memory_reply(facts=facts)))
     ids = [item["id"] for item in report_of(tree)["proposals"]]
     assert len(ids) == 2 and len(set(ids)) == 2
@@ -821,7 +855,7 @@ def test_new_memory_is_readable_by_the_backfill_grammar(tree):
     read_notes(tree, note())
     add_memory(tree, "other", "Other text.")
     memory_store.snapshot_all(tree.paths.projects_dir, tree.memory, "base")
-    claim = 'He said: "keep it short" and that is that.'
+    claim = 'He said: "print it short" and that is that.'
     run(tree, LIVE, FakeCall(memory=memory_reply(change(claim=claim))))
     front, body = backfill.read_front_matter(memory_path(tree, "short-reports").read_text(encoding="utf-8"), "test")
     assert front["description"] == claim

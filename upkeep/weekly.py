@@ -5,7 +5,8 @@ Order of a run:
     1. If this ISO week's pass already succeeded, do nothing.
     2. Run the daily pass if none completed today.
     3. For each project: one tool-less model call over its notes, memories and source. Each
-       suggested change then goes through ``weekly_gate``.
+       suggested change then goes through the script checks of ``weekly_gate``. One more tool-less
+       call for the whole pass then judges what is left, given only each claim and its quotes.
     4. One tool-less call across projects for proposals, checked against the routes.
     5. Research for new skills, plugins and tool servers. If search is unavailable the pass
        fails here, before any proposal or memory is written.
@@ -15,6 +16,9 @@ Order of a run:
 
 Idempotent per ISO week. A run reuses model replies whose input is unchanged. A folder holding
 this week's commit is never written again, and a run that succeeded does nothing the next time.
+What was applied is recorded before it is written, in ``applied_changes.py``, and every report of
+the week takes applied changes from there, so a retry or a crash cannot lose them. A retry also
+keeps the proposals and rejections of the run before it, whose notes are used up by then.
 A run with application off does not count against one with it on, and does not use up notes.
 It also researches held items, which stay held, so that it proves the research path in a thin week.
 
@@ -26,8 +30,9 @@ Written under the data folder:
     reports/YYYY-Www/groups/         model replies by group, with a hash of their input
     reports/YYYY-Www/research/       research records
     reports/YYYY-Www/usage.jsonl     one line per model call
+    reports/YYYY-Www/applied.json    changes applied this week, written before the files
     proposals/YYYY-Www/<id>/         proposal.json, and SKILL.md for a skill's draft
-    state/weekly.json                windows consumed by a pass that applied its changes
+    state/weekly.json                windows and counts used up by a pass that applied its changes
 
 report.json, schema version 1 (checked by ``schemas.validate_weekly_report``):
 
@@ -39,7 +44,7 @@ report.json, schema version 1 (checked by ``schemas.validate_weekly_report``):
                        assistant_statement, session, source {notes, note_index}, new_evidence,
                        outcome applied|would_apply, commit, before, after (the file's text)
     rejected[]         subject, project_folder, reason, detail, claim, quote, source
-    proposals[]        id, kind (skill, plugin, hook, mcp, global_rule, memory_fact,
+    proposals[]        id, kind (skill, plugin, hook, mcp, global_rule, memory_fact, memory_split_claim,
                        memory_deletion, memory_revision, item_revision), change_type, title,
                        what, why, target, basis, evidence, exact_change, draft_path, research,
                        status open|already_open, project_folder
@@ -52,6 +57,7 @@ A failed run writes the report too, with empty lists for what it did not reach.
 """
 from __future__ import annotations
 
+import applied_changes
 import argparse
 import glob
 import hashlib
@@ -69,6 +75,7 @@ import ledger
 import memory_store
 import model_call
 import pass_support
+import render
 import research
 import review_data
 import schemas
@@ -83,14 +90,17 @@ STATUS_FAILED = "failed"
 STATUS_BUDGET_STOPPED = "budget_stopped"
 EXIT_CODES = {STATUS_OK: 0, STATUS_FAILED: 1, STATUS_BUDGET_STOPPED: 3}
 RESULT_SCHEMA_VERSION = 1
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
+OLD_STATE_SCHEMA_VERSION = 1
 PROPOSAL_SCHEMA_VERSION = 1
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 MEMORY_PROMPT = os.path.join(PROMPTS_DIR, "weekly_memory.md")
+VERIFY_PROMPT = os.path.join(PROMPTS_DIR, "weekly_verify.md")
 PROPOSALS_PROMPT = os.path.join(PROMPTS_DIR, "weekly_proposals.md")
 
 KIND_MEMORY_FACT = "memory_fact"
+KIND_MEMORY_SPLIT = "memory_split_claim"
 KIND_MEMORY_DELETION = "memory_deletion"
 KIND_MEMORY_REVISION = "memory_revision"
 KIND_ITEM_REVISION = "item_revision"
@@ -123,11 +133,16 @@ def weekly_state_path(config: Config) -> str:
 
 
 def load_weekly_state(config: Config) -> dict[str, Any]:
-    """Which windows are used up. No file means none, since the first pass creates it."""
+    """Which note windows and which counts files are used up. No file means none, since the first
+    pass creates it. Version 1 held both in one map, and which of the two a key stood for cannot be
+    told from it, so a key counts as used up in both: nothing used up is read again. A window a
+    version 1 pass wrongly used up stays used up."""
     path = weekly_state_path(config)
     if not os.path.exists(path):
-        return {"schema_version": STATE_SCHEMA_VERSION, "consumed_windows": {}}
+        return {"schema_version": STATE_SCHEMA_VERSION, "consumed_windows": {}, "consumed_counts": {}}
     state = _read_json(path)
+    if state.get("schema_version") == OLD_STATE_SCHEMA_VERSION:
+        return {"schema_version": STATE_SCHEMA_VERSION, "consumed_windows": dict(state["consumed_windows"]), "consumed_counts": dict(state["consumed_windows"])}
     if state.get("schema_version") != STATE_SCHEMA_VERSION:
         raise ValueError(f"{path}: schema_version {state.get('schema_version')!r}")
     return state
@@ -163,9 +178,14 @@ def _memory_folder(config: Config, project_folder: str) -> str:
     return os.path.join(config.paths.projects_dir, project_folder, "memory")
 
 
+def _add_problem(config: Config, what: str, error: Exception) -> None:
+    ledger.add_item_problems(ledger.ledgers_dir_of(config.paths.data_dir), [{"what": what, "detail": f"{type(error).__name__}: {error}"}])
+
+
 def _memories_input(config: Config, project_folder: str) -> str:
     """The memories of a project, each with its recorded entries. A founding reason appears only
-    if verified: a backfilled, unverified reason is not evidence for anything."""
+    if verified: a backfilled, unverified reason is not evidence for anything. A ledger that cannot
+    be read is listed for the review, and the memory is shown without it."""
     folder = _memory_folder(config, project_folder)
     ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
     if not os.path.isdir(folder):
@@ -175,16 +195,20 @@ def _memories_input(config: Config, project_folder: str) -> str:
         if not name.endswith(".md"):
             continue
         text = memory_store.read_memory_file(os.path.join(folder, name))
-        lines = [f'<memory name="{name[:-3]}">\n{text}\n</memory>']
+        lines = [f'<memory name="{name[:-3]}">\n{render.neutralise_tags(text)}\n</memory>']
         item = ledger.ItemId(ledger.project_scope(project_folder), ledger.KIND_MEMORY, name[:-3])
         if ledger.item_exists(ledgers_dir, item):
-            document = ledger.load_ledger(ledgers_dir, item)
-            if document["founding"]["status"] == schemas.FOUNDING_VERIFIED:
-                lines.append(f"verified founding reason: {document['founding']['reason']}")
-            lines.extend(
-                f"recorded {entry['direction']}, by {entry['who']} ({entry['basis']}): {entry['what']}"
-                for entry in document["entries"]
-            )
+            try:
+                document = ledger.load_ledger(ledgers_dir, item)
+            except ledger.UNREADABLE as error:
+                _add_problem(config, f"memory {name[:-3]} in {project_folder}", error)
+            else:
+                if document["founding"]["status"] == schemas.FOUNDING_VERIFIED:
+                    lines.append(render.neutralise_tags(f"verified founding reason: {document['founding']['reason']}"))
+                lines.extend(
+                    render.neutralise_tags(f"recorded {entry['direction']}, by {entry['who']} ({entry['basis']}): {entry['what']}")
+                    for entry in document["entries"]
+                )
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -194,12 +218,12 @@ def _memory_group_input(
 ) -> tuple[str, dict[str, weekly_notes.NoteRecord]]:
     session_refs = {window.key: f"s{position}" for position, window in enumerate(group.windows, 1)}
     refs = {f"n{position}": record for position, record in enumerate(group.records, 1)}
-    notes = "\n".join(weekly_notes.render_note(ref, session_refs[record.window.key], record) for ref, record in refs.items())
+    notes = render.neutralise_tags("\n".join(weekly_notes.render_note(ref, session_refs[record.window.key], record) for ref, record in refs.items()))
     sources = "\n".join(
         f'<session ref="{session_refs[window.key]}">{store.exchanges(window)}\n</session>' for window in group.windows
     )
     scope = ledger.project_scope(group.project_folder)
-    declined = _declined_lines(decisions, lambda value: value == scope)
+    declined = render.neutralise_tags(_declined_lines(decisions, lambda value: value == scope))
     text = (
         f"<memories>\n{_memories_input(config, group.project_folder)}\n</memories>\n\n"
         f"<declined>\n{declined}\n</declined>\n\n"
@@ -210,11 +234,14 @@ def _memory_group_input(
 
 
 def _existing_items_input(ledgers_dir: str) -> str:
-    return "\n".join(
+    problems: list[dict[str, str]] = []
+    text = "\n".join(
         f"{document['identity']['kind']}: {document['identity']['name']}"
-        for document in ledger.iter_ledgers(ledgers_dir)
+        for document in ledger.iter_ledgers(ledgers_dir, problems)
         if document["identity"]["scope"] == ledger.SCOPE_GLOBAL
     )
+    ledger.add_item_problems(ledgers_dir, problems)
+    return text
 
 
 def _hook_settings_input(config: Config) -> str:
@@ -235,26 +262,26 @@ def _proposals_input(
     for record in chosen:
         session_refs.setdefault(record.window.session_id, f"s{len(session_refs) + 1}")
     refs = {f"n{position}": record for position, record in enumerate(chosen, 1)}
-    notes = "\n".join(weekly_notes.render_note(ref, session_refs[record.window.session_id], record) for ref, record in refs.items())
+    notes = render.neutralise_tags("\n".join(weekly_notes.render_note(ref, session_refs[record.window.session_id], record) for ref, record in refs.items()))
     shown = failures[: config.weekly.failures_shown]
-    failure_lines = "\n".join(
+    failure_lines = render.neutralise_tags("\n".join(
         json.dumps({
             "ref": item.ref, "tool": item.tool, "error_start": item.signature, "commands_lost": item.commands_lost,
             "sessions": [session_refs.get(session, "other") for session in item.sessions],
         }, ensure_ascii=False)
         for item in shown
-    )
-    procedure_lines = "\n".join(
+    ))
+    procedure_lines = render.neutralise_tags("\n".join(
         json.dumps({"ref": item.ref, "name": item.name, "calls": item.calls, "session": session_refs.get(item.session_id, "other")}, ensure_ascii=False)
         for item in procedures
-    )
-    declined = _declined_lines(decisions, lambda value: value == ledger.SCOPE_GLOBAL)
+    ))
+    declined = render.neutralise_tags(_declined_lines(decisions, lambda value: value == ledger.SCOPE_GLOBAL))
     weekly = config.weekly
     text = (
         f"Thresholds: recurrence in {weekly.recurrence_sessions} sessions; costly once at "
         f"{weekly.costly_once_tool_calls} calls; failures at {weekly.failure_min_commands_lost} commands lost.\n\n"
-        f"<existing_items>\n{_existing_items_input(ledger.ledgers_dir_of(config.paths.data_dir))}\n</existing_items>\n\n"
-        f"<hook_settings>\n{_hook_settings_input(config)}\n</hook_settings>\n\n"
+        f"<existing_items>\n{render.neutralise_tags(_existing_items_input(ledger.ledgers_dir_of(config.paths.data_dir)))}\n</existing_items>\n\n"
+        f"<hook_settings>\n{render.neutralise_tags(_hook_settings_input(config))}\n</hook_settings>\n\n"
         f"<declined>\n{declined}\n</declined>\n\n"
         f"<notes>\n{notes}\n</notes>\n\n"
         f"<failures>\n{failure_lines}\n</failures>\n\n"
@@ -317,7 +344,7 @@ def _memory_proposal(kind: str, name: str, folder: str, title: str, what: str, w
     return {
         "id": proposal_id(kind, f"{folder} {name} {distinct}"),
         "kind": kind,
-        "change_type": schemas.CHANGE_EXISTING if kind != KIND_MEMORY_FACT else schemas.CHANGE_NEW,
+        "change_type": schemas.CHANGE_NEW if kind in (KIND_MEMORY_FACT, KIND_MEMORY_SPLIT) else schemas.CHANGE_EXISTING,
         "title": title,
         "what": what,
         "why": why,
@@ -375,6 +402,7 @@ def _research_candidates(
                     "claim": candidate["what"], "quote": "", "source": None,
                 })
                 continue
+            record, _ = extract.redact_value(record, config)
             _write_json(cache, {"description_sha256": digest, "research": record})
         kept.append({**candidate, "research": record})
     return kept, held
@@ -421,18 +449,19 @@ def _revision_declined(decisions: Sequence[Mapping[str, Any]], identity: Mapping
     revision stays out until an entry behind the flag is newer than the rejection."""
     latest = max(datetime.fromisoformat(entry["date"]) for entry in cited)
     return any(
-        decision["scope"] == identity["scope"] and decision["kind"] == identity["kind"] and decision["name"] == identity["name"]
+        decision["scope"] == identity["scope"] and decision["kind"] == identity["kind"] and decision["name"].casefold() == identity["name"].casefold()
         and decision["action"] == schemas.ACTION_REVISION and datetime.fromisoformat(decision["decided_at"]) >= latest
         for decision in decisions
     )
 
 
 def _revision_proposals(
-    flags: Sequence[Mapping[str, Any]], config: Config, ledgers_dir: str, changed: set[tuple[str, str]], decisions: Sequence[Mapping[str, Any]]
+    flags: Sequence[Mapping[str, Any]], config: Config, ledgers_dir: str, changed: set[tuple[str, str]], decisions: Sequence[Mapping[str, Any]], found: backfill.InventoryScan
 ) -> list[dict[str, Any]]:
-    """A flag raises a proposal to revise, and never edits or deletes. A memory gone, changed in
-    this pass, changed by the weekly pass since the entries behind the flag, or a revision rejected
-    since them is passed over."""
+    """A flag raises a proposal to revise, and never edits or deletes. An item gone from the setup,
+    a memory changed in this pass or by the weekly pass since the entries behind the flag, or a
+    revision rejected since them is passed over. An item that could not be read cannot be called
+    gone, so its flag stands."""
     proposals = []
     for flag in flags:
         identity = flag["identity"]
@@ -452,9 +481,13 @@ def _revision_proposals(
                 continue
             kind = KIND_MEMORY_REVISION
         else:
+            if not found.could_be_there(identity):
+                continue
             folder = ""
             kind = KIND_ITEM_REVISION
-        evidence = {"identity": identity, "flag_reason": flag["reason"], "entries": [{k: entry[k] for k in ("date", "session", "who", "basis", "what", "quote")} for entry in cited]}
+        shown = ("date", "session", "who", "basis", "what", "quote")
+        support = [entry for entry in document["entries"] if entry["id"] in flag["entries_for"]]
+        evidence = {"identity": identity, "flag_reason": flag["reason"], "entries": [{k: entry[k] for k in shown} for entry in cited], "entries_for": [{k: entry[k] for k in shown} for entry in support]}
         proposals.append(_memory_proposal(
             kind, identity["name"], folder, f"Review {identity['kind']} {identity['name']}",
             "Read this item against what was said about it, and revise it if it no longer holds.",
@@ -463,21 +496,45 @@ def _revision_proposals(
     return proposals
 
 
-def _fact_and_deletion_proposals(state: weekly_gate.MemoryGateState) -> list[dict[str, Any]]:
-    proposals = []
+def _split_proposal(item: weekly_gate.ScreenedChange, sibling: str) -> dict[str, Any]:
+    """A claim whose source statement also gave a rejected claim. A create or add can be written by
+    approving it. A replace or remove changes text already there, so it is read and revised by hand."""
+    change = item.change
+    why = f"From the same statement of the user, this other claim was rejected: {sibling}. Saved alone, this one could say something the user did not say, so someone reads them together."
+    evidence = _evidence_of([item.record], change={
+        "action": change.action, "claim": change.claim, "old_text": change.old_text, "endorsement": change.endorsement, "quote": change.quote,
+        "assistant_statement": change.assistant_statement, "session": item.record.window.session_id,
+    })
+    if change.action in (schemas.ACTION_CREATE, schemas.ACTION_ADD):
+        return _memory_proposal(KIND_MEMORY_SPLIT, change.memory, item.project_folder, f"Half of a statement: {change.memory}", change.claim, why, change.claim, evidence, distinct=change.claim)
+    return _memory_proposal(
+        KIND_MEMORY_REVISION, change.memory, item.project_folder, f"Half of a statement: {change.memory}",
+        f"{change.action} in memory {change.memory}: {change.old_text} -> {change.claim}", why, "", {**evidence, "identity": {"scope": ledger.project_scope(item.project_folder), "kind": ledger.KIND_MEMORY, "name": change.memory}},
+        distinct=change.claim,
+    )
+
+
+def _fact_and_deletion_proposals(state: weekly_gate.MemoryGateState, title_max_chars: int) -> list[dict[str, Any]]:
+    proposals = [_split_proposal(item, sibling) for item, sibling in state.split_proposals]
     for fact, record, folder in state.fact_proposals:
         proposals.append(_memory_proposal(
-            KIND_MEMORY_FACT, fact.memory, folder, f"Save a fact in memory {fact.memory}", fact.claim,
+            KIND_MEMORY_FACT, fact.memory, folder, fact.title[: title_max_chars], fact.claim,
             "A lasting fact the user never reacted to, so someone reads it before it is saved.",
             fact.claim, _evidence_of([record]), distinct=fact.claim,
         ))
     for gated in state.deletion_proposals:
         change = gated.change
+        whole_file = change.action == schemas.ACTION_DELETE
         proposals.append(_memory_proposal(
             KIND_MEMORY_DELETION, f"{change.memory} {change.old_text}", gated.project_folder,
-            f"Remove from memory {change.memory}", f"Take this out: {change.old_text}",
-            "Past the limit on deletions in one pass, so this one waits for review.",
-            f"{change.action} {change.memory}: {change.old_text}", _evidence_of([gated.record]),
+            f"Delete memory {change.memory}" if whole_file else f"Remove from memory {change.memory}",
+            f"Delete this whole file: {change.memory}. It holds: {change.old_text}" if whole_file else f"Take this out: {change.old_text}",
+            "Deleting a whole memory always waits for review." if whole_file else "Past the limit on deletions in one pass, so this one waits for review.",
+            f"{change.action} {change.memory}: {change.old_text}",
+            _evidence_of([gated.record], change={
+                "claim": change.claim, "endorsement": change.endorsement, "quote": change.quote,
+                "assistant_statement": change.assistant_statement, "session": gated.record.window.session_id,
+            }),
         ))
     return proposals
 
@@ -504,43 +561,98 @@ def _writes_of_folder(
     return writes, index_edits
 
 
-def _record_in_ledger(gated: weekly_gate.GatedChange, week: str, now: datetime, ledgers_dir: str) -> None:
-    change = gated.change
-    item = ledger.ItemId(ledger.project_scope(gated.project_folder), ledger.KIND_MEMORY, change.memory)
-    session = gated.record.window.session_id
-    if change.action == schemas.ACTION_CREATE:
+def _record_in_ledger(record: Mapping[str, Any], week: str, now: datetime, ledgers_dir: str) -> None:
+    """A change's ledger entry, from its applied record. Safe to repeat: an entry id is added once."""
+    item = ledger.ItemId(ledger.project_scope(record["project_folder"]), ledger.KIND_MEMORY, record["memory"])
+    if record["action"] == schemas.ACTION_CREATE:
         ledger.ensure_ledger(
             ledgers_dir, item,
-            {"reason": change.claim, "status": schemas.FOUNDING_VERIFIED, "source": "discussion"},
+            {"reason": record["claim"], "status": schemas.FOUNDING_VERIFIED, "source": "discussion"},
             {"status": schemas.LIMIT_NOT_STATED, "text": None},
-            {"status": schemas.ORIGIN_TRACED, "session": session, "project_folder": gated.project_folder, "at": now.isoformat(), "tool": THIS_RUN_TOOL, "creating_call_found": True},
+            {"status": schemas.ORIGIN_TRACED, "session": record["session"], "project_folder": record["project_folder"], "at": now.isoformat(), "tool": THIS_RUN_TOOL, "creating_call_found": True},
             now.isoformat(),
         )
-    basis = schemas.BASIS_DIRECT if change.endorsement == schemas.ENDORSED_SAID else change.endorsement
+    basis = schemas.BASIS_DIRECT if record["endorsement"] == schemas.ENDORSED_SAID else record["endorsement"]
     ledger.append_entry(ledgers_dir, item, {
-        "id": gated.id,
+        "id": record["id"],
         "date": now.isoformat(),
-        "session": session,
-        "project_folder": gated.project_folder,
-        "direction": schemas.STANCE_AGAINST if change.action in schemas.DELETING_ACTIONS else schemas.STANCE_FOR,
+        "session": record["session"],
+        "project_folder": record["project_folder"],
+        "direction": schemas.STANCE_AGAINST if record["action"] in schemas.DELETING_ACTIONS else schemas.STANCE_FOR,
         "who": schemas.WHO_USER,
         "basis": basis,
-        "what": f"{change.action}: {change.claim}",
-        "quote": change.quote,
+        "what": f"{record['action']}: {record['claim']}",
+        "quote": record["quote"],
         "quote_check": schemas.QUOTE_VERIFIED,
         "origin_of_point": "user",
-        "source": {"notes": f"{WEEKLY_SOURCE_PREFIX}{week}/{gated.id}", "note_index": gated.record.note_index},
+        "source": {"notes": f"{WEEKLY_SOURCE_PREFIX}{week}/{record['id']}", "note_index": record["source"]["note_index"]},
     })
 
 
+def _mark_folder_committed(config: Config, journal: dict[str, Any], folder_name: str, commit: str) -> None:
+    applied_changes.mark_committed(journal["folders"][folder_name], commit)
+    applied_changes.save(config, journal)
+
+
+def _record_folder_in_ledger(config: Config, journal: dict[str, Any], folder_name: str, now: datetime) -> None:
+    """Entries for a folder's changes, once. One whose ledger cannot be read is listed for the
+    review and tried again by the next run; the change itself is already made and stays in the review."""
+    entry = journal["folders"][folder_name]
+    recorded = True
+    for record in entry["changes"]:
+        try:
+            _record_in_ledger(record, journal["week"], now, ledger.ledgers_dir_of(config.paths.data_dir))
+        except ledger.UNREADABLE as error:
+            _add_problem(config, f"memory {record['memory']} in {folder_name}", error)
+            recorded = False
+    entry["ledger_recorded"] = recorded
+    applied_changes.save(config, journal)
+
+
+def _sync_items(config: Config, now: datetime) -> None:
+    synced = backfill.sync_items(config, now)
+    ledger.add_item_problems(ledger.ledgers_dir_of(config.paths.data_dir), synced["item_problems"])
+
+
+def _reconcile_applied(config: Config, week: str, weekly_state: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
+    """Finish what a crash left, in every week on record: folders settled, ledger entries added, and
+    for an earlier week, its windows used up. Returns changes no report has shown from earlier weeks."""
+    applied_changes.settle_folders(config)
+    unreported = []
+    windows_before = len(weekly_state["consumed_windows"])
+    for held_week in applied_changes.weeks_on_disk(config):
+        journal = applied_changes.load(config, held_week)
+        for folder_name, entry in applied_changes.committed_entries(journal):
+            if not entry["ledger_recorded"]:
+                _sync_items(config, now)
+                _record_folder_in_ledger(config, journal, folder_name, now)
+            if held_week < week and not entry["reported"]:
+                unreported.extend(entry["changes"])
+                for key in entry["windows"]:
+                    weekly_state["consumed_windows"][key] = held_week
+    if len(weekly_state["consumed_windows"]) != windows_before:
+        _write_json(weekly_state_path(config), weekly_state)
+    return unreported
+
+
+def _mark_reported(config: Config, week: str) -> None:
+    for held_week in applied_changes.weeks_on_disk(config):
+        if held_week <= week:
+            journal = applied_changes.load(config, held_week)
+            for _, entry in applied_changes.committed_entries(journal):
+                entry["reported"] = True
+            applied_changes.save(config, journal)
+
+
 def _apply_changes(
-    state: weekly_gate.MemoryGateState, config: Config, week: str, run_id: str, now: datetime
-) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, str]]]:
-    """Apply per folder. Returns commit by change id, changes refused at the last moment, and
-    folders that failed. A folder holding this week's commit is left alone."""
-    ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
-    backfill.sync_items(config, now)
-    commits: dict[str, str] = {}
+    state: weekly_gate.MemoryGateState, config: Config, week: str, run_id: str, now: datetime, windows: Sequence[weekly_notes.Window]
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+    """Apply per folder, recording each before writing it. Returns changes refused at the last moment,
+    folders that failed, and secret patterns redacted from the record. A folder holding this week's
+    commit is left alone."""
+    journal = applied_changes.load(config, week)
+    _sync_items(config, now)
+    redacted_total = 0
     conflicts: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     by_folder: dict[str, list[weekly_gate.GatedChange]] = {}
@@ -553,8 +665,22 @@ def _apply_changes(
             continue
         writes, index_edits = _writes_of_folder(changes, state, config)
         message = f"Upkeep weekly {week}, run {run_id}: {len(changes)} memory changes"
+
+        def record_before_writing(left_alone: Sequence[str], written: Sequence[Mapping[str, Any]]) -> None:
+            nonlocal redacted_total
+            records, redacted = extract.redact_value(
+                [_change_record(gated, schemas.OUTCOME_APPLIED, None) for gated in changes if f"{gated.change.memory}.md" not in left_alone], config
+            )
+            redacted_total += redacted
+            journal["folders"][folder_name] = {
+                "status": applied_changes.STATUS_PREPARED, "run_id": run_id, "commit": None, "changes": records, "written": list(written),
+                "windows": [window.key for window in windows if window.project_folder == folder_name],
+                "ledger_recorded": False, "reported": False,
+            }
+            applied_changes.save(config, journal)
+
         try:
-            outcome = memory_store.apply_memory_writes(folder, writes, index_edits, config.memory, week, message)
+            outcome = memory_store.apply_memory_writes(folder, writes, index_edits, config.memory, week, message, record_before_writing)
         except memory_store.MemoryStoreError as error:
             errors.append({"project_folder": folder_name, "error": str(error)})
             continue
@@ -565,10 +691,31 @@ def _apply_changes(
                     "detail": "a live session changed this file after the change was worked out",
                     "claim": gated.change.claim, "quote": gated.change.quote, "source": gated.record.source_json(),
                 })
-                continue
-            commits[gated.id] = outcome["commit"]
-            _record_in_ledger(gated, week, now, ledgers_dir)
-    return commits, conflicts, errors
+        if outcome["commit"] is not None:
+            _mark_folder_committed(config, journal, folder_name, outcome["commit"])
+            _record_folder_in_ledger(config, journal, folder_name, now)
+    return conflicts, errors, redacted_total
+
+
+def _merge_with_earlier_run(
+    report: dict[str, Any], earlier: Optional[Mapping[str, Any]], applied: Sequence[Mapping[str, Any]], carried_over: Sequence[Mapping[str, Any]]
+) -> None:
+    """What a report holds besides this run's findings. Applied changes come from their record,
+    and a retry keeps what the run before it found, since those notes are used up. A trial run's
+    report is left out of this: it used up nothing, so the same things are worked out again."""
+    trial = [item for item in report["memory_changes"] if item["outcome"] == schemas.OUTCOME_WOULD_APPLY]
+    report["memory_changes"] = [*carried_over, *applied, *trial]
+    if earlier is None or not earlier["apply_enabled"]:
+        return
+    fresh_ids = {item["id"] for item in report["proposals"]}
+    report["proposals"] = [*(item for item in earlier["proposals"] if item["id"] not in fresh_ids), *report["proposals"]]
+    held_ids = {item["id"] for item in report["held"]}
+    report["held"] = [*(item for item in earlier["held"] if item["id"] not in held_ids), *report["held"]]
+    known = {(item["subject"], item["reason"], item["claim"]) for item in report["rejected"]}
+    report["rejected"] = [*(item for item in earlier["rejected"] if (item["subject"], item["reason"], item["claim"]) not in known), *report["rejected"]]
+    if not report["coverage"].get("windows"):
+        report["coverage"] = earlier["coverage"]
+        report["failures_ranked"] = earlier["failures_ranked"]
 
 
 def before_after_checks(config: Config, week: str) -> list[dict[str, Any]]:
@@ -585,10 +732,15 @@ def before_after_checks(config: Config, week: str) -> list[dict[str, Any]]:
             if change["outcome"] != schemas.OUTCOME_APPLIED or change["commit"] is None:
                 continue
             item = ledger.ItemId(ledger.project_scope(change["project_folder"]), ledger.KIND_MEMORY, change["memory"])
-            entries = [] if not ledger.item_exists(ledgers_dir, item) else [
-                entry for entry in ledger.load_ledger(ledgers_dir, item)["entries"]
-                if not entry["source"]["notes"].startswith(WEEKLY_SOURCE_PREFIX)
-            ]
+            entries = []
+            if ledger.item_exists(ledgers_dir, item):
+                try:
+                    entries = [
+                        entry for entry in ledger.load_ledger(ledgers_dir, item)["entries"]
+                        if not entry["source"]["notes"].startswith(WEEKLY_SOURCE_PREFIX)
+                    ]
+                except ledger.UNREADABLE as error:
+                    _add_problem(config, f"memory {change['memory']} in {change['project_folder']}", error)
             before = [entry for entry in entries if datetime.fromisoformat(entry["date"]) <= applied_at]
             since = [entry for entry in entries if datetime.fromisoformat(entry["date"]) > applied_at]
             text = memory_store.read_memory_file(os.path.join(_memory_folder(config, change["project_folder"]), f"{change['memory']}.md"))
@@ -662,23 +814,30 @@ def _run_stages(
     caller: pass_support.Caller,
     now: datetime,
     report: dict[str, Any],
-) -> None:
-    """Everything after the daily pass. Fills ``report`` as it goes; failures raise."""
+    weekly_state: dict[str, Any],
+) -> int:
+    """Everything after the daily pass. Fills ``report`` as it goes; failures raise. Returns secret
+    patterns redacted from the record of applied changes."""
     ledgers_dir = ledger.ledgers_dir_of(config.paths.data_dir)
-    flags = ledger.write_flags(ledgers_dir, now, config.ledger)
+    problems: list[dict[str, str]] = []
+    flags = ledger.write_flags(ledgers_dir, now, config.ledger, problems)
+    found = backfill.scan_inventory(config)
+    ledger.add_item_problems(ledgers_dir, [*problems, *found.problems])
     decisions = ledger.load_decisions(ledgers_dir)
     state = sessions.load_state(daily.state_path(config))
-    weekly_state = load_weekly_state(config)
     consumed = weekly_state["consumed_windows"]
     discovered = sessions.discover_sessions(config.paths.projects_dir)
     records, windows, skipped = weekly_notes.load_windows(config, state, consumed, discovered)
-    failures, procedures = weekly_notes.aggregate_counts(config, consumed)
+    store = weekly_notes.SourceStore(config)
+    records, windows, set_aside = weekly_notes.set_aside_unreadable(records, windows, store, config.weekly)
+    skipped = [*skipped, *set_aside]
+    failures, procedures = weekly_notes.aggregate_counts(config, weekly_state["consumed_counts"])
     report["coverage"] = _coverage(records, windows, skipped, config)
     report["failures_ranked"] = [failure.to_json() for failure in failures]
     report["before_after"] = before_after_checks(config, week)
 
-    store = weekly_notes.SourceStore(config)
-    gate_state = weekly_gate.MemoryGateState()
+    gate_state = weekly_gate.MemoryGateState(one_moment_quotes=weekly_notes.one_moment_quotes(records))
+    journal = applied_changes.load(config, week)
     memory_prompt = _read_text(MEMORY_PROMPT)
     groups_dir = os.path.join(report_dir_of(config, week), "groups")
 
@@ -686,14 +845,22 @@ def _run_stages(
         return memory_store.read_memory_file(os.path.join(_memory_folder(config, folder), f"{name}.md"))
 
     for group in weekly_notes.memory_groups(records, store, config.weekly):
+        if group.project_folder in journal["folders"]:
+            continue  # It holds this week's commit, so it is not written again this week.
         stdin_text, refs = _memory_group_input(group, store, config, decisions)
         reply = _cached_or_called_reply(
             os.path.join(groups_dir, f"memory-{group.name}.json"), memory_prompt, stdin_text, config.weekly.memory_model,
             f"weekly-memory:{group.name}", caller, schemas.parse_memory_reply,
         )
-        weekly_gate.gate_memory_reply(reply, group, refs, store, read_current, decisions, config, gate_state)
-    weekly_gate.check_quote_batch(gate_state, config.weekly.quote_failure_batch_min)
+        weekly_gate.gate_memory_reply(reply, group, refs, store, decisions, config, gate_state)
     report["rejected"] = gate_state.rejected
+    weekly_gate.check_quote_batch(gate_state, config.weekly.quote_failure_batch_min)
+    if gate_state.screened:
+        verdicts = _cached_or_called_reply(
+            os.path.join(groups_dir, "verification.json"), _read_text(VERIFY_PROMPT), weekly_gate.verification_input(gate_state),
+            config.weekly.verification_model, "weekly-verification", caller, schemas.parse_claim_verdicts,
+        )
+        weekly_gate.apply_verdicts(gate_state, verdicts, read_current, config)
 
     candidates: list[dict[str, Any]] = []
     held: list[dict[str, Any]] = []
@@ -729,27 +896,30 @@ def _run_stages(
     held.extend(over_limit)
 
     changed = {(gated.project_folder, gated.change.memory) for gated in gate_state.accepted}
-    all_proposals = [*kept, *_fact_and_deletion_proposals(gate_state), *_revision_proposals(flags, config, ledgers_dir, changed, decisions)]
+    all_proposals = [*kept, *_fact_and_deletion_proposals(gate_state, config.weekly.title_max_chars), *_revision_proposals(flags, config, ledgers_dir, changed, decisions, found)]
     stored, _ = _store_proposals(all_proposals, config, week)
     report["proposals"] = stored
     report["held"] = [{key: value for key, value in item.items() if not key.startswith("_")} for item in held]
 
     if local.apply_memory_changes:
-        commits, conflicts, errors = _apply_changes(gate_state, config, week, run_id, now)
-        report["memory_changes"] = [
-            _change_record(gated, schemas.OUTCOME_APPLIED, commits[gated.id]) for gated in gate_state.accepted if gated.id in commits
-        ]
+        waiting = {
+            window.key for window in windows
+            if window.project_folder in journal["folders"] and window.key not in journal["folders"][window.project_folder]["windows"]
+        }
+        conflicts, errors, redacted = _apply_changes(gate_state, config, week, run_id, now, windows)
         gate_state.rejected.extend(conflicts)
         if errors:
             raise memory_store.MemoryStoreError(f"{len(errors)} memory folders were not applied: {errors}")
         for window in windows:
-            consumed[window.key] = week
-        for count_path in glob.glob(os.path.join(glob.escape(config.paths.data_dir), "counts", "*", "*.json")):
-            key = os.path.relpath(count_path, os.path.join(config.paths.data_dir, "counts")).replace(os.sep, "/")[: -len(".json")]
-            consumed[key] = week
+            # A window read after its folder got this week's commit waits for next week's pass.
+            if window.key not in waiting:
+                consumed[window.key] = week
+        for key in weekly_notes.counts_files(config):
+            weekly_state["consumed_counts"][key] = week
         _write_json(weekly_state_path(config), weekly_state)
-    else:
-        report["memory_changes"] = [_change_record(gated, schemas.OUTCOME_WOULD_APPLY, None) for gated in gate_state.accepted]
+        return redacted
+    report["memory_changes"] = [_change_record(gated, schemas.OUTCOME_WOULD_APPLY, None) for gated in gate_state.accepted]
+    return 0
 
 
 def _empty_report(week: str, run_id: str, now: datetime, apply_enabled: bool) -> dict[str, Any]:
@@ -797,6 +967,8 @@ def run_weekly(
         "apply_enabled": local.apply_memory_changes,
         "budget_stopped": False,
         "failed_sessions": [],
+        "item_problems": [],
+        "possible_renames": [],
         "backlog_sessions": [],
         "windows_reset": [],
         "secrets_redacted": 0,
@@ -808,8 +980,19 @@ def run_weekly(
         result["wall_seconds"] = round(time.monotonic() - started, 1)
         return result
 
+    memory_store.remove_partial_files(config.paths.data_dir)
+    report_path = os.path.join(report_dir_of(config, week), "report.json")
+    earlier_report = _read_json(report_path) if os.path.exists(report_path) else None
+    weekly_state = load_weekly_state(config)
+    carried_over: list[dict[str, Any]] = []
+    try:
+        carried_over = _reconcile_applied(config, week, weekly_state, now)
+    except (memory_store.MemoryStoreError, ledger.LedgerError) as error:
+        result["status"] = STATUS_FAILED
+        result["stop_reason"] = f"could not finish what an earlier run left: {type(error).__name__}: {error}"
+
     daily_cost = 0.0
-    if not daily_completed_on(config, local_now):
+    if result["status"] == STATUS_OK and not daily_completed_on(config, local_now):
         daily_result = daily.run_daily(config, run_id, call=call)
         with open(os.path.join(config.paths.data_dir, "logs", f"daily-{run_id}.result.json"), "w", encoding="utf-8") as handle:
             json.dump(daily_result, handle, ensure_ascii=False, indent=1)
@@ -829,9 +1012,10 @@ def run_weekly(
 
     report = _empty_report(week, run_id, now, local.apply_memory_changes)
     caller = pass_support.Caller(config, report_dir_of(config, week), run_id, daily_cost, call)
+    journal_redacted = 0
     if result["status"] == STATUS_OK:
         try:
-            _run_stages(config, local, week, run_id, caller, now, report)
+            journal_redacted = _run_stages(config, local, week, run_id, caller, now, report, weekly_state)
         except model_call.BudgetExhaustedError as error:
             result["status"] = STATUS_BUDGET_STOPPED
             result["budget_stopped"] = True
@@ -848,7 +1032,10 @@ def run_weekly(
         ) as error:
             result["status"] = STATUS_FAILED
             result["stop_reason"] = f"{type(error).__name__}: {error}"
-    if result["status"] == STATUS_OK and result["failed_sessions"]:
+    held_problems = ledger.read_item_problems(ledger.ledgers_dir_of(config.paths.data_dir))
+    result["item_problems"] = held_problems["problems"]
+    result["possible_renames"] = held_problems["possible_renames"]
+    if result["status"] == STATUS_OK and (result["failed_sessions"] or result["item_problems"]):
         result["status"] = STATUS_FAILED
 
     report["status"] = result["status"]
@@ -859,12 +1046,15 @@ def run_weekly(
         "cost_usd": round(caller.totals.cost_usd, 4),
         "daily_cost_usd": daily_cost,
     }
+    applied = [record for _, entry in applied_changes.committed_entries(applied_changes.load(config, week)) for record in entry["changes"]]
+    _merge_with_earlier_run(report, earlier_report, applied, carried_over)
     report, redacted = extract.redact_value(report, config)
     schemas.validate_weekly_report(report, "weekly report")
-    _write_json(os.path.join(report_dir_of(config, week), "report.json"), report)
+    _write_json(report_path, report)
     result["review_page"] = review_data.write_review(config, report, now)
+    _mark_reported(config, week)
 
-    result["secrets_redacted"] += redacted
+    result["secrets_redacted"] += redacted + journal_redacted + caller.secrets_redacted
     result["model_calls"] = caller.totals.calls
     result["tokens"] = caller.totals.tokens
     result["cost_usd"] = round(caller.totals.cost_usd, 4)

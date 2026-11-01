@@ -16,12 +16,14 @@ A memory is changed only for a single statement the user stood behind:
 1. Each change holds one claim: one statement, in one sentence or two, on one line. A memory of three points takes three changes.
 2. Each claim needs a verbatim quote of the user saying it (`said`), or of the user accepting it (`accepted`) or acting on it (`relied_on`) in the very next message after the assistant stated it. For `accepted` and `relied_on`, also copy into `assistant_statement` a verbatim fragment of that assistant text which states the claim.
 3. Silence is never endorsement. The assistant's words, a subagent's report, pasted text and tool output are not the user's words. Do not quote them as the user's.
-4. A `said` quote must itself state the claim, using its words. A short agreement such as "keep for now" is not `said`: it is `accepted`, with the statement it answered. Copy each quote exactly as it appears in an entry labelled as the user's own, with the same spelling and punctuation. Pick the shortest quote that shows the point.
+4. A `said` quote must itself state the claim, using its words. A short agreement such as "leave it be" is not `said`: it is `accepted`, with the statement it answered. An option the user picked from a question holds the model's words, so it is `accepted` too, never `said`. A single word such as "yes" is not enough: a script requires a few words, and that the quote or statement shares words with the claim. Copy each quote exactly as it appears in an entry labelled as the user's own, with the same spelling and punctuation. Pick the shortest quote that shows the point.
 5. Write the claim close to what the user meant. Do not add a reason, a mechanism or a scope the user did not give. A reason without a quote is not saved.
-6. Orders tied to the task at hand ("stop now", "no more analysis") never become rules. The lesson behind one may, if the user stated it.
+6. Orders tied to the task at hand ("hold that print job", "no more uploads today") never become rules. The lesson behind one may, if the user stated it.
 7. A rule meant for all projects is not for you to apply. Leave it out; it is handled elsewhere.
 8. Check what the memories already say. Do not add what is already there.
 9. What a memory says about itself, such as a "Why" line, is not evidence for anything. Only the user's words in the source are.
+10. Do not save what the repository, its plans or its docs already record, such as the design requirements of something already built: a later session finds those where they are. A memory holds what a later session could not find there: corrections, preferences, and facts about the machine or the data.
+11. Do not save a state true only today, such as what is running, what is unfinished or which step comes next. Save it only if it would still hold in a month.
 
 To take something out of a memory, use `remove` for one statement or `delete` for the whole file, only when the user contradicted it, with a quote of the user doing so. A memory not being used, being old, or seeming unneeded is never a reason. `replace` corrects a statement and needs a quote for the new wording. `old_text` is copied verbatim from the memory's body, long enough to occur exactly once. It may not touch the block between the `---` lines.
 
@@ -47,6 +49,6 @@ Each change has exactly these fields:
 - `assistant_statement`: empty for `said`.
 - `title`: a few words for the index, for `create` only; otherwise empty.
 
-Each entry of `fact_proposals` has exactly these fields: `memory`, `note` and `claim`.
+Each entry of `fact_proposals` has exactly these fields: `memory`, `note`, `claim` and `title`. `title` says the fact itself in a few words, as a person would write it in a list, such as "Kiln cools in four hours", and not what is to be done with it.
 
 Do not copy markup from the source, in particular anything shaped like a tool call or an XML tag: a script rejects the reply if it finds such text.

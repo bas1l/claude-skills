@@ -17,6 +17,10 @@ from urllib.parse import urlsplit
 SECTION_MEMORY = "memory"
 SECTION_PROPOSAL = "proposal"
 OUTCOME_APPLIED = "applied"
+KIND_POSSIBLE_RENAME = "possible_rename"
+KIND_STANCE_CHECK = "stance_check"
+KIND_RULE_BROKEN = "rule_broken"
+KIND_MALFUNCTION = "malfunction"
 
 _KIND_LABEL = {
     "skill": "Skill (written instructions Claude can load)",
@@ -25,6 +29,7 @@ _KIND_LABEL = {
     "mcp": "MCP server (a connection that gives Claude tools)",
     "global_rule": "Rule for every project (global CLAUDE.md)",
     "memory_fact": "Fact to save in memory",
+    "memory_split_claim": "Half of a statement, held because the other half was rejected",
     "memory_deletion": "Text to remove from memory",
     "memory_revision": "Memory to reread and revise",
     "item_revision": "Item to reread and revise",
@@ -37,6 +42,7 @@ _APPROVE_DOES = {
     "mcp": "the session shows the exact command, and applies it only after you confirm.",
     "global_rule": "the session shows the exact change, and applies it only after you confirm.",
     "memory_fact": "writes this into the memory as a new commit, which can be reverted.",
+    "memory_split_claim": "writes this into the memory as a new commit, which can be reverted.",
     "memory_deletion": "takes this out of the memory as a new commit, which can be reverted.",
     "memory_revision": "you and the session reread it together. Nothing changes by itself.",
     "item_revision": "you and the session reread it together. Nothing changes by itself.",
@@ -68,6 +74,10 @@ _OUTCOME_LABEL = {
     "rejected": "Rejected",
     "approved": "Approved",
 }
+_QUIET_LEDGER = (
+    'A missing "for" means little: it needs a visible reaction from you to what the item did, and most of the time nobody '
+    "says anything when something works. A quiet ledger does not show that an item is fine. It shows only that nothing was seen either way."
+)
 _CHANGE_TYPE_LABEL = {"new": "Something new", "change": "A change to something that exists"}
 
 _STYLE = """
@@ -110,13 +120,17 @@ def _text(value: Any) -> str:
 def _link(url: Any, label: Any = None) -> str:
     """A plain anchor shown as external, or inert text if it is not a web address."""
     address = str(url)
-    parts = urlsplit(address)
     shown = _text(label if label else address)
+    try:
+        parts = urlsplit(address)
+        host = parts.hostname
+    except ValueError:
+        return f"{shown} <span class=\"external\">(not a web link)</span>"
     if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
         return f"{shown} <span class=\"external\">(not a web link)</span>"
     return (
         f'<a href="{_text(address)}" rel="noreferrer" target="_blank">{shown}</a> '
-        f'<span class="external">(external site: {_text(parts.hostname)})</span>'
+        f'<span class="external">(external site: {_text(host)})</span>'
     )
 
 
@@ -132,8 +146,10 @@ def _diff(before: Optional[str], after: Optional[str]) -> str:
     """Only the lines that change, added or removed."""
     lines = difflib.unified_diff((before or "").splitlines(), (after or "").splitlines(), lineterm="", n=0)
     rows = []
-    for line in lines:
-        if line.startswith(("---", "+++", "@@")):
+    for position, line in enumerate(lines):
+        # The first two lines are the file header. A hunk line starts at the first character, and
+        # a line of the file never does, since every one of them has its + or - in front.
+        if position < 2 or line.startswith("@@"):
             continue
         name = "added" if line.startswith("+") else "removed"
         rows.append(f'<div class="{name}">{_text(line)}</div>')
@@ -152,7 +168,7 @@ def _ledger(item: Mapping[str, Any]) -> str:
     reason = summary["founding_reason"]
     status = summary["founding_status"]
     rows = "".join(
-        f"<li>{_text(entry['date'][:10])}, {_text(entry['direction'])}, by {_text(entry['who'])}: {_text(entry['what'])}</li>"
+        f"<li>{_text(entry['date'][:10])}, {_text(entry['direction'].replace('_', ' '))}, by {_text(entry['who'])}: {_text(entry['what'])}</li>"
         for entry in summary["latest"]
     )
     body = (
@@ -160,6 +176,7 @@ def _ledger(item: Mapping[str, Any]) -> str:
         f'<span class="soft">({_text(status)})</span></p>'
         f"<p>{_text(summary['entries_for'])} entries for, {_text(summary['entries_against'])} against. "
         f'<span class="soft">File: <code>{_text(summary["file"])}</code></span></p>'
+        f'<p class="soft">{_text(_QUIET_LEDGER)}</p>'
     )
     if rows:
         body += f"<ul>{rows}</ul>"
@@ -325,7 +342,16 @@ def _top(review: Mapping[str, Any]) -> str:
     else:
         parts.append('<div class="banner plain">Weeks overdue: 0.</div>')
     for failure in review["failures"]:
-        parts.append(f'<div class="banner warn"><strong>Something failed ({_text(failure["kind"])}).</strong> {_text(failure["summary"])}</div>')
+        if failure["kind"] == KIND_POSSIBLE_RENAME:
+            parts.append(f'<div class="banner note"><strong>Worth a look: this may be a rename.</strong> {_text(failure["summary"])}</div>')
+        elif failure["kind"] == KIND_STANCE_CHECK:
+            parts.append(f'<div class="banner plain"><strong>Stance check.</strong> {_text(failure["summary"])}</div>')
+        elif failure["kind"] == KIND_RULE_BROKEN:
+            parts.append(f'<div class="banner note"><strong>Rule broken, with a cost.</strong> {_text(failure["summary"])}</div>')
+        elif failure["kind"] == KIND_MALFUNCTION:
+            parts.append(f'<div class="banner note"><strong>A fault of its own, across sessions.</strong> {_text(failure["summary"])}</div>')
+        else:
+            parts.append(f'<div class="banner warn"><strong>Something failed ({_text(failure["kind"])}).</strong> {_text(failure["summary"])}</div>')
     if not review["apply_enabled"]:
         parts.append('<div class="banner note"><strong>This was a trial run.</strong> No memory was changed. Memory items show what would have applied.</div>')
     coverage = review["coverage"]
@@ -337,7 +363,8 @@ def _top(review: Mapping[str, Any]) -> str:
     parts.append(
         '<div class="banner plain"><strong>How to use this page.</strong> Read here, and type in the terminal that opened with it, '
         "in plain words, using the numbers below. For example: <code>undo 1, approve 2, why 3</code>. "
-        "This page cannot change anything by itself. Reload it to see what you decided.</div>"
+        "This page cannot change anything by itself. Reload it to see what you decided. If the session says the numbers changed, "
+        "reload this page and check the page version above before you go on.</div>"
     )
     return "".join(parts)
 
@@ -421,7 +448,7 @@ def render_page(review: Mapping[str, Any]) -> str:
         f"<title>Claude setup review, week {_text(review['week'])}</title><style>{_STYLE}</style></head><body><main>"
         f"<h1>Claude setup review, week {_text(review['week'])}</h1>"
         f'<p class="soft">Built {_text(review["built_at"][:16].replace("T", " "))} UTC from weekly run {_text(review["run_id"])}. '
-        f'{_text(len(review["items"]))} numbered items.</p>'
+        f'{_text(len(review["items"]))} numbered items. Page version <code>{_text(review["review_id"])}</code>.</p>'
         f"{_top(review)}"
         f"{_section('Memory changes', memory_note, memory)}"
         f"{_section('Proposals', 'Nothing happens unless you approve.', proposals)}"

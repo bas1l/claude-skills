@@ -12,6 +12,10 @@
   New-ScheduledTaskTrigger. Trigger times have no offset, so they stay local across daylight
   saving. Settings match the Daily Brief tasks, with a 6-hour limit in place of 30 minutes.
 
+  The second trigger of the weekly and monthly tasks is a retry: the pass does nothing if its week
+  or month already succeeded. The monthly retry at 09:30 comes after the 6-hour limit of the 03:00
+  run, so that run cannot still be going and make IgnoreNew drop the retry.
+
   The tasks run the installed copy under the home directory, wherever this script was started
   from. Only tasks named in $TASKS and the research check are ever written or removed.
 
@@ -67,8 +71,8 @@ $TASKS = @(
         triggers = @(@{ time = '01:00:00'; kind = 'daily' }) }
     [ordered]@{ name = 'Claude Code Upkeep Weekly'; pass = 'weekly'; schedule = 'every Wednesday at 02:00 and 05:30'
         triggers = @(@{ time = '02:00:00'; kind = 'wednesday' }, @{ time = '05:30:00'; kind = 'wednesday' }) }
-    [ordered]@{ name = 'Claude Code Upkeep Monthly'; pass = 'monthly'; schedule = 'first Saturday of each month at 03:00'
-        triggers = @(@{ time = '03:00:00'; kind = 'first_saturday' }) }
+    [ordered]@{ name = 'Claude Code Upkeep Monthly'; pass = 'monthly'; schedule = 'first Saturday of each month at 03:00 and 09:30'
+        triggers = @(@{ time = '03:00:00'; kind = 'first_saturday' }, @{ time = '09:30:00'; kind = 'first_saturday' }) }
 )
 
 function Assert-Elevated {

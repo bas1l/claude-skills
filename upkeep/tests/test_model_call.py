@@ -124,9 +124,9 @@ def test_call_sends_utf8_stdin_scrubs_nesting_and_logs(monkeypatch, config, tmp_
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "x")
     monkeypatch.setenv("UNRELATED_VARIABLE", "kept")
     seen = fake_run(monkeypatch, json.dumps(good_result()))
-    result = call(config, tmp_path, stdin_text="Linköping")
+    result = call(config, tmp_path, stdin_text="naïve café")
     assert result.text == '{"notes": []}'
-    assert seen["input"] == "PROMPT\n\nLinköping".encode("utf-8")
+    assert seen["input"] == "PROMPT\n\nnaïve café".encode("utf-8")
     assert seen["env"]["UNRELATED_VARIABLE"] == "kept"
     assert "CLAUDECODE" not in seen["env"] and "CLAUDE_CODE_ENTRYPOINT" not in seen["env"]
     log = json.loads((tmp_path / "logs" / "usage.jsonl").read_text(encoding="utf-8"))

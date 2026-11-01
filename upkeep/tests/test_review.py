@@ -383,7 +383,7 @@ def test_a_number_that_does_not_exist_is_refused(tree):
 def test_a_review_that_changed_is_refused(tree):
     publish(tree, report(proposals=[proposal(1), proposal(2)]))
     stale = current(tree)["review_id"]
-    publish(tree, report(proposals=[proposal(2), proposal(1)]))
+    publish(tree, report(proposals=[proposal(1), proposal(2), proposal(3)]))
     with pytest.raises(review_session.ReviewRefused, match="changed since it was read"):
         review_session.reject(tree, stale, 1, SESSION, NOW)
 
@@ -756,8 +756,9 @@ def test_record_approved_needs_a_detail_and_refuses_kinds_with_their_own_action(
     with pytest.raises(review_session.ReviewRefused, match="own approve action"):
         review_session.record_approved(tree, review_id, 1, "Done.", NOW)
     publish(tree, report(proposals=[proposal(1)]))
+    number, = [item["number"] for item in current(tree)["items"] if item["record"]["kind"] != "skill"]
     with pytest.raises(review_session.ReviewRefused, match="Say what was applied"):
-        review_session.record_approved(tree, current(tree)["review_id"], 1, " ", NOW)
+        review_session.record_approved(tree, current(tree)["review_id"], number, " ", NOW)
 
 
 # ---------------------------------------------------------------------------

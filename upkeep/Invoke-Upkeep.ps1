@@ -15,7 +15,9 @@
   Lock, <data>\upkeep.lock: the process id and start time of this script and of the
   pass. A lock is live if either process still exists with that same start time, which
   rules out a reused process id. A stale lock is removed, the run goes on so that it can
-  catch up, and the marker reports it. A lock that cannot be read stops the run.
+  catch up, and the marker reports it. A lock that cannot be read, such as an empty file left by
+  a crash, is treated as stale once it is older than status.unreadable_lock_grace_seconds in
+  config.json. Younger, it may be a run just starting, so this run reports it and exits 2.
 
   Failure marker, <data>\failure-marker.json, read by the upkeep_status hook. The file
   exists only when there is something to report:
@@ -115,13 +117,16 @@ function Enter-RunLock([string] $Path) {
             $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         } catch [IO.IOException] {
             if (-not (Test-Path -LiteralPath $Path)) { throw }
-            try {
-                $holder = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
-                $holderPid = $holder.pid
-            } catch {
-                throw "lock file $Path cannot be read: $($_.Exception.Message). Check that no run is live, then delete it."
+            $holder = $null
+            try { $holder = [IO.File]::ReadAllText($Path) | ConvertFrom-Json } catch { $holder = $null }
+            if ($null -eq $holder -or $null -eq $holder.pid) {
+                $script:lockUnreadable = $true
+                $age = ((Get-Date) - (Get-Item -LiteralPath $Path).LastWriteTime).TotalSeconds
+                if ($age -lt $config.status.unreadable_lock_grace_seconds) { return $false }
+                $script:staleLock = [pscustomobject] @{ pass = 'unknown'; run_id = 'unknown' }
+                Remove-Item -LiteralPath $Path
+                continue
             }
-            if ($null -eq $holderPid) { throw "lock file $Path holds no process id. Check that no run is live, then delete it." }
             $script:lockHolder = $holder
             if ((Test-ProcessIsLive $holder.pid $holder.pid_start) -or (Test-ProcessIsLive $holder.child_pid $holder.child_start)) {
                 return $false
@@ -149,9 +154,23 @@ $markerPath = Join-Path $dataDir 'failure-marker.json'
 $logDir = Join-Path $dataDir 'logs'
 $script:staleLock = $null
 $script:lockHolder = $null
+$script:lockUnreadable = $false
 
-if (-not (Enter-RunLock $lockPath)) {
-    $text = "Another upkeep run is live: pass $($script:lockHolder.pass), run $($script:lockHolder.run_id), process $($script:lockHolder.pid). Lock: $lockPath"
+try {
+    if ($null -eq $config.status.unreadable_lock_grace_seconds) { throw "config file $ConfigPath has no status.unreadable_lock_grace_seconds" }
+    $lockTaken = Enter-RunLock $lockPath
+} catch {
+    $text = "$Pass pass could not take the lock $lockPath`: $($_.Exception.Message)"
+    Add-MarkerEntry $markerPath 'failed' $text $EXIT_FAILED $lockPath $null
+    [Console]::Error.WriteLine($text)
+    exit $EXIT_FAILED
+}
+if (-not $lockTaken) {
+    $text = if ($script:lockUnreadable) {
+        "A lock file that could not be read is too new to call stale, so another run may be starting. Lock: $lockPath"
+    } else {
+        "Another upkeep run is live: pass $($script:lockHolder.pass), run $($script:lockHolder.run_id), process $($script:lockHolder.pid). Lock: $lockPath"
+    }
     Add-MarkerEntry $markerPath 'failed' "$Pass pass did not start. $text" $EXIT_LOCKED $lockPath $null
     [Console]::Error.WriteLine($text)
     exit $EXIT_LOCKED
@@ -161,7 +180,11 @@ $exitCode = $EXIT_FAILED
 $clock = [Diagnostics.Stopwatch]::StartNew()
 try {
     if ($null -ne $script:staleLock) {
-        $text = "Previous $($script:staleLock.pass) run $($script:staleLock.run_id) ended without releasing its lock; this run took over."
+        $text = if ($script:lockUnreadable) {
+            "A lock file that could not be read was left behind by an earlier run; this run took over."
+        } else {
+            "Previous $($script:staleLock.pass) run $($script:staleLock.run_id) ended without releasing its lock; this run took over."
+        }
         Write-Warning $text
         Add-MarkerEntry $markerPath 'stale_lock' $text 0 $lockPath $null
     }
@@ -211,7 +234,8 @@ try {
         } elseif ($result.status -eq 'budget_stopped') {
             Add-MarkerEntry $markerPath 'budget_stopped' "$Pass pass stopped at its budget; $(@($result.backlog_sessions).Count) sessions wait for the next run." $exitCode $resultPath $result
         } else {
-            $why = if ($result.stop_reason) { "stopped: $($result.stop_reason)" } else { "$(@($result.failed_sessions).Count) sessions and $(@($result.memory_snapshot.errors).Count) memory folders failed" }
+            $items = if ($result.PSObject.Properties['item_problems']) { @($result.item_problems).Count } else { 0 }
+            $why = if ($result.stop_reason) { "stopped: $($result.stop_reason)" } else { "$(@($result.failed_sessions).Count) sessions and $(@($result.memory_snapshot.errors).Count) memory folders failed, and $items items could not be read" }
             Add-MarkerEntry $markerPath 'failed' "$Pass pass failed, $why" $exitCode $resultPath $result
         }
         if ($null -ne $result -and @($result.windows_reset).Count -gt 0) {

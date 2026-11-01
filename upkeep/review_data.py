@@ -11,9 +11,12 @@ review.json:
 
     review_id        a hash of the numbers and keys, so a session can tell if they moved
     week, run_id, built_at, report_status, stop_reason, apply_enabled, coverage, usage
-    weeks_overdue    whole ISO weeks from the oldest report no review action has followed, to now
+    weeks_overdue    whole ISO weeks from the oldest report with something open that no review
+                     action has followed, to now
     last_action_at   when something was last decided in this review, or null
-    failures[]       kind, summary: failed or stopped pass, failure marker entries, skipped windows
+    failures[]       kind, summary: failed or stopped pass, failure marker entries, skipped windows,
+                     items that could not be read, and four that fail nothing: possible renames, what
+                     the stance check did, rules broken at a cost, and an item's own faults, per item
     items[]          number, key, section memory|proposal, origin weekly|monthly, week (the item's
                      original week), carried, title, allowed[], decision {outcome, at, detail} or
                      null, skipped_at, ledger, record (the report's record, unchanged)
@@ -23,8 +26,9 @@ Numbers run across sections, newest week first in each. They change only when a 
 
 An item stays open until it is decided. A review carries forward the open items of the review
 before it with their original week, and a pass offering the same thing again does not add a second
-item. A change that would have applied in a trial run is not carried: it never happened, and the
-next pass works it out again.
+item. A review built again in its own week keeps what it held, because a retry finds nothing new
+and a change already applied must stay here to be undone. A change that would have applied in a
+trial run is not kept or carried: it never happened, and the next pass works it out again.
 
 How the monthly pass joins: it writes ``reports/monthly/<name>.json``,
 
@@ -42,7 +46,7 @@ import json
 import os
 import re
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
 import extract
@@ -63,14 +67,21 @@ MARKER_FILE = "failure-marker.json"
 MARKER_SCHEMA_VERSION = 1
 LEDGER_LATEST_SHOWN = 3
 STATUS_OK = "ok"
+KIND_ITEM_PROBLEM = "item_problem"
+KIND_POSSIBLE_RENAME = review_page.KIND_POSSIBLE_RENAME
+KIND_STANCE_CHECK = review_page.KIND_STANCE_CHECK
+KIND_RULE_BROKEN = review_page.KIND_RULE_BROKEN
+KIND_MALFUNCTION = review_page.KIND_MALFUNCTION
+USAGE_STAMP = "%Y-%m-%dT%H:%M:%S%z"
 ALREADY_OPEN = "already_open"
 OUTCOME_APPLIED = schemas.OUTCOME_APPLIED
 OUTCOME_WOULD_APPLY = schemas.OUTCOME_WOULD_APPLY
 KIND_MEMORY_FACT = "memory_fact"
+KIND_MEMORY_SPLIT = "memory_split_claim"
 KIND_MEMORY_DELETION = "memory_deletion"
 KIND_MEMORY_REVISION = "memory_revision"
 KIND_ITEM_REVISION = "item_revision"
-_MEMORY_PROPOSAL_KINDS = frozenset({KIND_MEMORY_FACT, KIND_MEMORY_DELETION, KIND_MEMORY_REVISION})
+_MEMORY_PROPOSAL_KINDS = frozenset({KIND_MEMORY_FACT, KIND_MEMORY_SPLIT, KIND_MEMORY_DELETION, KIND_MEMORY_REVISION})
 _TITLE_OF_ACTION = {
     schemas.ACTION_CREATE: "New memory",
     schemas.ACTION_ADD: "Added to memory",
@@ -81,6 +92,13 @@ _TITLE_OF_ACTION = {
 ALLOWED_APPLIED = [schemas.ACTION_UNDO, schemas.ACTION_KEEP, schemas.ACTION_SKIP, schemas.ACTION_WHY]
 ALLOWED_WOULD_APPLY = [schemas.ACTION_UNDO, schemas.ACTION_SKIP, schemas.ACTION_WHY]
 ALLOWED_PROPOSAL = [schemas.ACTION_APPROVE, schemas.ACTION_REJECT, schemas.ACTION_SKIP, schemas.ACTION_WHY]
+
+
+# Entries that neither side of the balance reads: their direction, their kind on the page, and what to make of them.
+_COUNTED_APART = (
+    (schemas.DIRECTION_RULE_BROKEN, KIND_RULE_BROKEN, "If this repeats, the rule may need revising."),
+    (schemas.DIRECTION_MALFUNCTION, KIND_MALFUNCTION, "Once in a session looks like nothing. The same fault in many sessions may need fixing."),
+)
 
 
 class ReviewDataError(ValueError):
@@ -167,11 +185,17 @@ def item_of(section: str, record: Mapping[str, Any]) -> Optional[ledger.ItemId]:
     return None
 
 
-def _ledger_summary(ledgers_dir: str, section: str, record: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+def ledger_summary(ledgers_dir: str, section: str, record: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What the page shows of an item's ledger. One that cannot be read is listed for the review,
+    and the page says only that nothing is recorded."""
     item = item_of(section, record)
     if item is None or not ledger.item_exists(ledgers_dir, item):
         return None
-    document = ledger.load_ledger(ledgers_dir, item)
+    try:
+        document = ledger.load_ledger(ledgers_dir, item)
+    except ledger.UNREADABLE as error:
+        ledger.add_item_problems(ledgers_dir, [{"what": f"{item.kind} {item.name}", "detail": f"{type(error).__name__}: {error}"}])
+        return None
     entries = document["entries"]
     latest = sorted(entries, key=lambda entry: datetime.fromisoformat(entry["date"]), reverse=True)[:LEDGER_LATEST_SHOWN]
     return {
@@ -198,7 +222,7 @@ def _memory_item(change: Mapping[str, Any], week: str, ledgers_dir: str) -> dict
         "allowed": list(ALLOWED_APPLIED if applied else ALLOWED_WOULD_APPLY),
         "decision": None,
         "skipped_at": None,
-        "ledger": _ledger_summary(ledgers_dir, schemas.SECTION_MEMORY, change),
+        "ledger": ledger_summary(ledgers_dir, schemas.SECTION_MEMORY, change),
         "record": dict(change),
     }
 
@@ -216,7 +240,7 @@ def _proposal_item(proposal: Mapping[str, Any], week: str, origin: str, ledgers_
         "allowed": list(ALLOWED_PROPOSAL),
         "decision": None,
         "skipped_at": None,
-        "ledger": _ledger_summary(ledgers_dir, schemas.SECTION_PROPOSAL, proposal),
+        "ledger": ledger_summary(ledgers_dir, schemas.SECTION_PROPOSAL, proposal),
         "record": dict(proposal),
     }
 
@@ -254,17 +278,25 @@ def _monday_of(week: str) -> date:
     return date.fromisocalendar(int(year), int(number), 1)
 
 
-def weeks_overdue(data_dir: str, now: datetime, last_action_here: Optional[str] = None) -> int:
-    """Whole ISO weeks from the oldest report that no review action has followed, to now."""
+def weeks_overdue(data_dir: str, now: datetime, last_action_here: Optional[str] = None, building: Optional[tuple[str, bool]] = None) -> int:
+    """Whole ISO weeks from the oldest report with something open that no review action has
+    followed, to now. An action is only ever taken on an item, so a week with nothing to act on
+    cannot be overdue. ``building`` is the week of a review not yet on disk, and whether it holds
+    anything open."""
     actions = [last_action_here] if last_action_here else []
     reports = []
     for week in week_folders(data_dir):
+        has_open = False
         if os.path.isfile(review_path(data_dir, week)):
-            action = _read_json(review_path(data_dir, week))["last_action_at"]
+            review = _read_json(review_path(data_dir, week))
+            has_open = any(item["decision"] is None for item in review["items"])
+            action = review["last_action_at"]
             if action:
                 actions.append(action)
+        if building is not None and building[0] == week:
+            has_open = building[1]
         path = os.path.join(reports_dir(data_dir), week, REPORT_FILE)
-        if os.path.isfile(path):
+        if has_open and os.path.isfile(path):
             reports.append((week, datetime.fromisoformat(_read_json(path)["generated_at"])))
     last_action = max(map(datetime.fromisoformat, actions)) if actions else None
     waiting = [week for week, generated in reports if last_action is None or generated > last_action]
@@ -273,10 +305,60 @@ def weeks_overdue(data_dir: str, now: datetime, last_action_here: Optional[str] 
     return max(0, (_monday_of(iso_week_of(now)) - _monday_of(waiting[0])).days // 7)
 
 
-def _failures(data_dir: str, status: str, stop_reason: Optional[str], coverage: Mapping[str, Any]) -> list[dict[str, str]]:
+def _stance_cost(data_dir: str, since: datetime) -> float:
+    """What the stance check cost since then, from the run-wide usage log. No log means no call yet.
+    A line a one-off call wrote there names no session, so it is not the check's."""
+    path = os.path.join(data_dir, "logs", "usage.jsonl")
+    if not os.path.exists(path):
+        return 0.0
+    with open(path, encoding="utf-8") as handle:
+        records = [json.loads(line) for line in handle if line.strip()]
+    return sum(
+        record["cost_usd"] for record in records
+        if record.get("session") == ledger.STANCE_USAGE_KEY and datetime.strptime(record["at"], USAGE_STAMP) > since
+    )
+
+
+def _signals(data_dir: str, window_days: int, now: datetime) -> list[dict[str, str]]:
+    """Inside the window: what the stance check did and cost, each item with a rule broken at a cost, and
+    each item with a fault of its own. They fail nothing, and are shown only if there is something to show."""
+    since = now - timedelta(days=window_days)
+    ledgers_dir = ledger.ledgers_dir_of(data_dir)
+    signals = []
+    path = os.path.join(ledgers_dir, ledger.VERDICTS_FILE)
+    if os.path.exists(path):
+        recent = [mention for mention in _read_json(path)["mentions"] if datetime.fromisoformat(mention["date"]) > since]
+        if recent:
+            counts = ", ".join(f"{sum(1 for mention in recent if mention['verdict'] == verdict)} {verdict}" for verdict in schemas.STANCE_VERDICTS)
+            signals.append({
+                "kind": KIND_STANCE_CHECK,
+                "summary": f"In the last {window_days} days the check judged {len(recent)} stances: {counts}. It cost ${_stance_cost(data_dir, since):.2f}. "
+                           f"Each verdict and its reason is in ledgers/{ledger.VERDICTS_FILE}.",
+            })
+    for document in ledger.iter_ledgers(ledgers_dir, []):  # What cannot be read is listed by the pass that writes item-problems.json.
+        for direction, kind, closing in _COUNTED_APART:
+            found = sorted(
+                (entry for entry in document["entries"] if entry["direction"] == direction and datetime.fromisoformat(entry["date"]) > since),
+                key=lambda entry: entry["date"],
+            )
+            if found:
+                identity = document["identity"]
+                times = f"{len(found)} time{'' if len(found) == 1 else 's'}"
+                sessions = len({entry["session"] for entry in found})
+                signals.append({
+                    "kind": kind,
+                    "summary": f"{identity['kind']} {identity['name']}: {times} in {sessions} session{'' if sessions == 1 else 's'} in the last {window_days} days, not counted for or against. "
+                               f"Latest: {found[-1]['what']} {closing}",
+                })
+    return signals
+
+
+def _failures(data_dir: str, status: str, stop_reason: Optional[str], coverage: Mapping[str, Any], window_days: int, now: datetime) -> list[dict[str, str]]:
     failures = []
+    held = ledger.read_item_problems(ledger.ledgers_dir_of(data_dir))
     if status != STATUS_OK:
-        failures.append({"kind": status, "summary": stop_reason if stop_reason else "the last weekly pass did not finish"})
+        unfinished = "the pass went through to the end, and is marked failed because of what is listed here" if held["problems"] else "the last weekly pass did not finish"
+        failures.append({"kind": status, "summary": stop_reason if stop_reason else unfinished})
     skipped = coverage.get("windows_skipped", [])
     if skipped:
         failures.append({"kind": "windows_skipped", "summary": f"{len(skipped)} conversation windows could not be read this week"})
@@ -286,6 +368,9 @@ def _failures(data_dir: str, status: str, stop_reason: Optional[str], coverage: 
         if marker.get("schema_version") != MARKER_SCHEMA_VERSION:
             raise ReviewDataError(f"{marker_path}: schema_version {marker.get('schema_version')!r}")
         failures.extend({"kind": entry["kind"], "summary": entry["summary"]} for entry in marker["entries"])
+    failures.extend({"kind": KIND_ITEM_PROBLEM, "summary": f"{problem['what']} could not be read. {problem['detail']}"} for problem in held["problems"])
+    failures.extend({"kind": KIND_POSSIBLE_RENAME, "summary": f"{rename['what']}. {rename['detail']}"} for rename in held["possible_renames"])
+    failures.extend(_signals(data_dir, window_days, now))
     return failures
 
 
@@ -327,7 +412,8 @@ def build_review(config: Config, report: Mapping[str, Any], now: datetime) -> di
     earlier_seen = {item["key"]: item for item in (same_week["items"] if same_week else [])}
     if same_week:
         for item in same_week["items"]:
-            if item["decision"] is not None:
+            trial = item["section"] == schemas.SECTION_MEMORY and item["record"]["outcome"] == OUTCOME_WOULD_APPLY
+            if item["decision"] is not None or not trial:
                 by_key[item["key"]] = item
     if earlier:
         for item in earlier["items"]:
@@ -336,9 +422,9 @@ def build_review(config: Config, report: Mapping[str, Any], now: datetime) -> di
             if item["section"] == schemas.SECTION_MEMORY and item["record"]["outcome"] == OUTCOME_WOULD_APPLY:
                 continue
             kept = earlier_seen.get(item["key"], item)
-            refreshed = _ledger_summary(ledgers_dir, item["section"], item["record"])
+            refreshed = ledger_summary(ledgers_dir, item["section"], item["record"])
             by_key[item["key"]] = {**item, "carried": True, "skipped_at": kept["skipped_at"], "ledger": refreshed}
-    carried_proposals = [item["record"] for item in by_key.values() if item["section"] == schemas.SECTION_PROPOSAL and item["carried"]]
+    carried_proposals = [item["record"] for item in by_key.values() if item["section"] == schemas.SECTION_PROPOSAL]
 
     fresh = [_memory_item(change, week, ledgers_dir) for change in report["memory_changes"]]
     for proposal in report["proposals"]:
@@ -363,9 +449,9 @@ def build_review(config: Config, report: Mapping[str, Any], now: datetime) -> di
         "report_status": report["status"],
         "stop_reason": report["stop_reason"],
         "apply_enabled": report["apply_enabled"],
-        "weeks_overdue": weeks_overdue(data_dir, now, last_action),
+        "weeks_overdue": weeks_overdue(data_dir, now, last_action, (week, any(item["decision"] is None for item in items))),
         "last_action_at": last_action,
-        "failures": _failures(data_dir, report["status"], report["stop_reason"], coverage),
+        "failures": _failures(data_dir, report["status"], report["stop_reason"], coverage, config.ledger.inferred_window_days, now),
         "coverage": coverage,
         "usage": report["usage"],
         "items": items,
@@ -387,7 +473,7 @@ def refresh_review(config: Config, now: datetime) -> str:
     data_dir = config.paths.data_dir
     review = latest_review(data_dir)
     review["weeks_overdue"] = weeks_overdue(data_dir, now, review["last_action_at"])
-    review["failures"] = _failures(data_dir, review["report_status"], review["stop_reason"], review["coverage"])
+    review["failures"] = _failures(data_dir, review["report_status"], review["stop_reason"], review["coverage"], config.ledger.inferred_window_days, now)
     return save_review(data_dir, review)
 
 

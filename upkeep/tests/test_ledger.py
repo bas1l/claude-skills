@@ -16,6 +16,8 @@ RULE = LedgerConfig(
     direct_against_entries=1,
     inferred_against_entries=3,
     inferred_window_days=28,
+    rename_name_overlap=0.5,
+    rename_flag_days=28,
     stated_limit_patterns=(),
     origin_tools=("Write", "Edit"),
 )
@@ -33,12 +35,19 @@ TRACED = {
 }
 
 
+def checked_apply_notes(notes_dir, *rest, **keywords):
+    """Every stance has passed its check: that check has tests of its own."""
+    from conftest import hold_all_stances
+    hold_all_stances(notes_dir)
+    return ledger.apply_notes(notes_dir, *rest, **keywords)
+
+
 def entry(entry_id, days_ago, direction, basis=schemas.BASIS_INFERRED):
     is_user = basis != schemas.BASIS_INFERRED
     return {
         "id": entry_id,
         "date": (NOW - timedelta(days=days_ago)).isoformat(),
-        "session": "s-1",
+        "session": f"s-{entry_id}",
         "project_folder": FOLDER,
         "direction": direction,
         "who": schemas.WHO_USER if is_user else schemas.WHO_AGENT,
@@ -84,7 +93,7 @@ def test_inferred_against_outside_the_window_do_not_count():
     assert ledger.lost_balance(ledger_with(*entries), NOW, RULE) is None
 
 
-def test_an_entry_for_in_the_window_blocks_the_inferred_rule():
+def test_an_entry_for_in_the_window_counts_against_the_inferred_balance():
     entries = [entry(name, 3, "against") for name in "abc"] + [entry("d", 10, "for")]
     assert ledger.lost_balance(ledger_with(*entries), NOW, RULE) is None
 
@@ -118,7 +127,7 @@ def test_accepted_is_not_a_direct_statement():
 
 
 def test_thresholds_come_from_the_rule():
-    strict = LedgerConfig(2, 1, 28, (), ())
+    strict = LedgerConfig(2, 1, 28, 0.5, 28, (), ())
     assert ledger.lost_balance(ledger_with(entry("a", 1, "against", schemas.BASIS_DIRECT)), NOW, strict) is None
     assert ledger.lost_balance(ledger_with(entry("a", 1, "against")), NOW, strict)["reason"] == ledger.REASON_INFERRED
 
@@ -206,10 +215,10 @@ def stores(tmp_path):
 def test_a_note_naming_an_item_adds_one_entry_and_rerun_adds_none(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named()]))
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["notes_with_entries"]) == (1, 1)
     before = open(ledger.ledger_path(ledgers, ITEM), "rb").read()
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["entries_already_present"]) == (0, 1)
     assert open(ledger.ledger_path(ledgers, ITEM), "rb").read() == before
     added = ledger.load_ledger(ledgers, ITEM)["entries"][0]
@@ -220,7 +229,7 @@ def test_a_note_naming_an_item_adds_one_entry_and_rerun_adds_none(stores):
 def test_non_use_adds_no_entry(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named("no_bearing")]))
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["mentions_no_bearing"], summary["notes_with_entries"]) == (0, 1, 0)
     assert ledger.load_ledger(ledgers, ITEM)["entries"] == []
 
@@ -228,7 +237,7 @@ def test_non_use_adds_no_entry(stores):
 def test_an_unknown_item_is_logged_and_not_added(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named(name="no-such-memory"), named(kind="skill", name="no-such-skill")]))
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["mentions_unmapped"]) == (0, 2)
     with open(os.path.join(ledgers, ledger.UNMAPPED_FILE), encoding="utf-8") as handle:
         logged = json.load(handle)["mentions"]
@@ -241,14 +250,14 @@ def test_an_unknown_item_is_logged_and_not_added(stores):
 def test_a_memory_is_looked_up_in_the_sessions_own_folder_only(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named()]), folder="another-project")
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["mentions_unmapped"]) == (0, 1)
 
 
 def test_a_markdown_suffix_on_a_memory_name_is_accepted(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named(name="some-memory.md")]))
-    assert ledger.apply_notes(notes, ledgers)["entries_added"] == 1
+    assert checked_apply_notes(notes, ledgers)["entries_added"] == 1
 
 
 def test_a_plugin_may_be_named_without_its_marketplace(stores):
@@ -257,7 +266,7 @@ def test_a_plugin_may_be_named_without_its_marketplace(stores):
         plugin = ledger.ItemId(ledger.SCOPE_GLOBAL, "plugin", name)
         ledger.ensure_ledger(ledgers, plugin, UNVERIFIED, NO_LIMIT, {**NO_ORIGIN, "status": schemas.ORIGIN_NOT_APPLICABLE}, "2030-01-01")
     write_chunk(data, "w1", stored_note([named(kind="plugin", name="one"), named(kind="plugin", name="two")]))
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["entries_added"], summary["mentions_unmapped"]) == (1, 1)
     with open(os.path.join(ledgers, ledger.UNMAPPED_FILE), encoding="utf-8") as handle:
         assert json.load(handle)["mentions"][0]["reason"] == ledger.UNMAPPED_AMBIGUOUS
@@ -271,7 +280,7 @@ def test_only_a_verified_said_quote_is_a_direct_statement(stores):
         stored_note([named()], "said", "a fabricated quote", schemas.QUOTE_NOT_FOUND, "user"),
         stored_note([named()], "accepted", "yes", schemas.QUOTE_VERIFIED),
     )
-    ledger.apply_notes(notes, ledgers)
+    checked_apply_notes(notes, ledgers)
     entries = ledger.load_ledger(ledgers, ITEM)["entries"]
     assert [(e["who"], e["basis"], e["quote"]) for e in entries] == [
         ("user", "direct_statement", "this is wrong"),
@@ -285,7 +294,7 @@ def test_old_notes_stay_readable_and_add_nothing(stores):
     old = stored_note([])
     del old["items"]
     write_chunk(data, "w1", old, version=schemas.NOTES_SCHEMA_WITHOUT_ITEMS)
-    summary = ledger.apply_notes(notes, ledgers)
+    summary = checked_apply_notes(notes, ledgers)
     assert (summary["notes_that_cannot_name_items"], summary["entries_added"]) == (1, 0)
 
 
@@ -293,20 +302,20 @@ def test_an_unknown_notes_version_raises(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([]), version=99)
     with pytest.raises(ledger.LedgerError):
-        ledger.apply_notes(notes, ledgers)
+        checked_apply_notes(notes, ledgers)
 
 
 def test_a_bad_stored_item_raises(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([{"kind": "memory", "name": "x", "stance": "unused"}]))
     with pytest.raises(schemas.SchemaError):
-        ledger.apply_notes(notes, ledgers)
+        checked_apply_notes(notes, ledgers)
 
 
 def test_a_flag_edits_no_ledger(stores):
     data, ledgers, notes = stores
     write_chunk(data, "w1", stored_note([named()], "said", "this is wrong", schemas.QUOTE_VERIFIED, "user"))
-    ledger.apply_notes(notes, ledgers)
+    checked_apply_notes(notes, ledgers)
     path = ledger.ledger_path(ledgers, ITEM)
     before = open(path, "rb").read()
     flags = ledger.write_flags(ledgers, NOW, RULE)

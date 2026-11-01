@@ -47,6 +47,11 @@
     ],
     "class_scan_chars": 3000,
     "signature_chars": 70,
+    "traceback_marker": "Traceback (most recent call last)",
+    "startup_noise_line_patterns": [
+      "[/\\\\]\\.(bashrc|bash_profile|bash_login|profile|zshrc|zshenv|zprofile)(: line [0-9]+: |:[0-9]+: )",
+      "[/\\\\]Microsoft\\.PowerShell_profile\\.ps1:"
+    ],
     "shell_tools": ["Bash", "PowerShell"]
   },
   "memory": {
@@ -56,16 +61,17 @@
   "secrets": {
     "patterns": [
       ["anthropic", "sk-ant-[A-Za-z0-9_\\-]{10,}"],
-      ["sk", "\\bsk-[A-Za-z0-9]{20,}"],
+      ["sk", "\\bsk-[A-Za-z0-9_\\-]{20,}"],
       ["github", "gh[pousr]_[A-Za-z0-9]{20,}"],
       ["github", "github_pat_[A-Za-z0-9_]{20,}"],
       ["aws", "AKIA[0-9A-Z]{16}"],
       ["slack", "xox[abpr]-[A-Za-z0-9\\-]{10,}"],
       ["google", "AIza[0-9A-Za-z_\\-]{30,}"],
       ["bearer", "(?i)\\bbearer\\s+[A-Za-z0-9._~+/=\\-]{20,}"],
-      ["key-value", "(?i)\\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\\b\\s*[=:]\\s*[\"']?[^\\s\"']{8,}"],
+      ["key-value", "(?i)(password|passwd|pwd|passphrase|secret(?!s)|credential|api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token)[A-Za-z0-9_\\-]{0,40}\\\\?[\"']?\\s*[=:]\\s*\\\\?(?:\"[^\"\\n]{8,}\"|'[^'\\n]{8,}'|[\"']?[^\\s\"']{8,})"],
+      ["key-value", "(?i)token\\\\?[\"']?\\s*[=:]\\s*\\\\?[\"']?(?=[^\\s\"']*[A-Za-z])[^\\s\"']{8,}"],
       ["jwt", "eyJ[A-Za-z0-9_\\-]{15,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{5,}"],
-      ["pem", "-----BEGIN [A-Z ]*PRIVATE KEY-----"]
+      ["pem", "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\\Z)"]
     ]
   },
   "inventory": {
@@ -73,12 +79,22 @@
     "settings_file": "~/.claude/settings.json",
     "optional_settings_files": ["~/.claude/settings.local.json"],
     "plugins_manifest": "~/.claude/skills/setup/plugins-mcp.json",
-    "user_config": "~/.claude.json"
+    "user_config": "~/.claude.json",
+    "installed_plugins_file": "~/.claude/plugins/installed_plugins.json"
+  },
+  "item_check": {
+    "listing_description_chars": 100,
+    "model": "sonnet",
+    "item_chars": 30000,
+    "group_chars": 400000,
+    "earlier_rulings_shown": 5
   },
   "ledger": {
     "direct_against_entries": 1,
     "inferred_against_entries": 3,
     "inferred_window_days": 28,
+    "rename_name_overlap": 0.5,
+    "rename_flag_days": 28,
     "stated_limit_patterns": ["(?i)\\bfor now\\b", "(?i)\\bfor the moment\\b", "(?i)\\bfor the time being\\b", "(?i)\\binterim\\b", "(?i)\\buntil further notice\\b"],
     "origin_tools": ["Write", "Edit"]
   },
@@ -91,7 +107,13 @@
     "failures_shown": 30,
     "max_deletions_per_pass": 5,
     "quote_failure_batch_min": 3,
-    "said_quote_shared_word_letters": 4,
+    "verification_model": "opus",
+    "said_quote_min_words": 3,
+    "reaction_quote_min_words": 2,
+    "assistant_statement_min_words": 4,
+    "tied_shared_words_min": 2,
+    "tied_word_min_letters": 3,
+    "tied_ignored_words": ["the", "and", "for", "with", "that", "this", "these", "those", "are", "was", "were", "been", "being", "have", "has", "had", "not", "but", "you", "your", "they", "them", "their", "its", "from", "into", "than", "then", "there", "here", "what", "which", "when", "will", "would", "can", "could", "should", "may", "might", "must", "shall", "does", "did", "all", "any", "user"],
     "group_chars": 400000,
     "source_assistant_chars": 1500,
     "claim_max_chars": 500,
@@ -99,6 +121,10 @@
     "index_hook_chars": 150,
     "reproposal_word_overlap": 0.6,
     "memory_excluded_origins": ["web"]
+  },
+  "status": {
+    "warn_after_hours_without_run": 50,
+    "unreadable_lock_grace_seconds": 60
   },
   "research": {
     "model": "sonnet",

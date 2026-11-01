@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -22,6 +23,9 @@ from typing import Any, Mapping, Optional, Sequence
 from config import ChunkingConfig, ModelConfig
 
 RESEARCH_TOOLS = ("WebSearch", "WebFetch")
+# As seen in real replies: a short line, with exit 1. Matched whatever the exit code and subtype,
+# because the same words in a "success" would otherwise fail schema checks one session at a time.
+LIMIT_REPLY_RE = re.compile(r"^You['\u2019]ve hit your [\w ]*limit\b")
 NO_HOOKS_SETTINGS = '{"disableAllHooks":true}'
 
 
@@ -31,6 +35,10 @@ class ModelCallError(RuntimeError):
 
 class BudgetExhaustedError(ModelCallError):
     """The call stopped at its dollar limit."""
+
+
+class LimitReachedError(ModelCallError):
+    """The login's usage limit is reached, which repeats for every call until it resets."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,8 @@ def check_result(stdout: str, returncode: int, stderr: str) -> Mapping[str, Any]
     try:
         result = json.loads(stdout)
     except json.JSONDecodeError as error:
+        if LIMIT_REPLY_RE.match(stdout.strip()):
+            raise LimitReachedError(f"usage limit reached (exit {returncode}): {stdout.strip()[:200]}") from error
         raise ModelCallError(
             f"result is not JSON (exit {returncode}, {len(stdout)} chars of output); stderr: {stderr[:500]}"
         ) from error
@@ -98,6 +108,8 @@ def check_result(stdout: str, returncode: int, stderr: str) -> Mapping[str, Any]
     subtype = result.get("subtype")
     if "budget" in str(subtype):
         raise BudgetExhaustedError(f"stopped at the dollar limit: subtype {subtype!r}")
+    if isinstance(result.get("result"), str) and LIMIT_REPLY_RE.match(result["result"].strip()):
+        raise LimitReachedError(f"usage limit reached (exit {returncode}, subtype {subtype!r}): {result['result'].strip()[:200]}")
     if returncode != 0 or subtype != "success" or result.get("is_error") is not False:
         raise ModelCallError(
             f"call failed: exit {returncode}, subtype {subtype!r}, is_error {result.get('is_error')!r}, "
@@ -133,6 +145,8 @@ def parse_stream(stdout: str) -> tuple[str, tuple[ToolActivity, ...]]:
         try:
             event = json.loads(line)
         except json.JSONDecodeError as error:
+            if LIMIT_REPLY_RE.match(line.strip()):
+                raise LimitReachedError(f"usage limit reached: {line.strip()[:200]}") from error
             raise ModelCallError(f"stream line is not JSON: {error}") from error
         kind = event.get("type")
         if kind == "result":
