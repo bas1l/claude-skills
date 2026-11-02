@@ -58,7 +58,7 @@ review the diff and commit it. Capture stops if an MCP server's URL or arguments
 | Path | What | How it reaches Claude Code |
 |---|---|---|
 | `<skill>/SKILL.md` | Global skills | Directly: this repo *is* `~/.claude/skills` |
-| `hooks/tldr-gate/` | TL;NR summary gate (UserPromptSubmit + Stop hooks) | Referenced in place by `settings.json` |
+| `hooks/tldr-gate/` | TL;NR summary rules (UserPromptSubmit), log-only check (Stop), and a summary added on screen when a long reply has none (MessageDisplay) | Referenced in place by `settings.json` |
 | `hooks/session-colocate/` | SessionStart hook: moves the session's `%TEMP%` dir (scratchpad, tasks) next to its transcript and leaves a junction ([README](hooks/session-colocate/README.md)) | Referenced in place by `settings.json` |
 | `setup/claude/CLAUDE.md` | Global instructions | `~/.claude/CLAUDE.md` is a one-line `@import` of it |
 | `setup/claude/guidance/` | Guidance read on demand ([which Claude Code feature for which purpose](setup/claude/guidance/claude-code-features.md)) | Pointer in `setup/claude/CLAUDE.md`, read in place |

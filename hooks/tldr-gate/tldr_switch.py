@@ -6,7 +6,7 @@ and is erased ({"decision": "block"}, exit 0), so it costs no turn. Any other pr
 when the flag is on, the rules go to stdout, which Claude Code injects as context
 the model can see -- the one channel the docs guarantee reaches Claude.
 
-The length threshold is announced here and enforced in tldr_gate.py. Both read
+The length threshold is announced here and checked in tldr_gate.py. Both read
 it from tldr_conf.py so they cannot disagree.
 """
 import datetime, json, os, re, sys

@@ -32,7 +32,8 @@ DEFAULTS = {
     "max_bullets":        3,   # the Ask bullet is extra and does not count
     "max_bullet_words":  25,   # room to NAME the subject, not room for prose
     "max_ask_words":     35,   # the Ask must name the options as well as ask
-    "max_retries":        2,
+    "summary_model":  "haiku",  # writes a summary when a long reply has none
+    "summary_timeout_s": 25,   # keep below the hook timeout in settings.json
     "ask_phrases":  ASK_PHRASES,   # a "?" is not the only way to ask something
 }
 
@@ -52,6 +53,9 @@ def load():
                 if isinstance(v, list) and all(isinstance(x, str) and x.strip()
                                                for x in v):
                     cfg[k] = [x.strip().lower() for x in v]
+            elif isinstance(default, str):
+                if isinstance(v, str) and v.strip():
+                    cfg[k] = v.strip()
             elif isinstance(v, int) and not isinstance(v, bool) and v > 0:
                 cfg[k] = v
     except Exception:

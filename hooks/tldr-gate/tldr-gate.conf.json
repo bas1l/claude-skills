@@ -5,5 +5,6 @@
   "max_bullets": 3,
   "max_bullet_words": 25,
   "max_ask_words": 35,
-  "max_retries": 2
+  "summary_model": "haiku",
+  "summary_timeout_s": 25
 }

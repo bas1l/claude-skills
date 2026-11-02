@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
-"""Stop hook: refuse to end the turn when a long reply lacks a valid TL;NR block.
+"""Stop hook: record whether a long reply ended with a valid TL;NR block.
 
-Short replies are exempt: below conf["min_chars"] the hook exits immediately, so
-a two-line answer never gets a summary bolted on top of it.
+Log only. It never blocks: a Stop hook runs after the reply is on screen, so a
+rejection prints a notice and puts the summary in a separate message. A reply with
+no summary gets one on screen from tldr_display.py, and tldr_switch.py injects the
+rules before each turn. Problems are written to the log to show how often they occur.
 
-A violation is reported as {"decision": "block", "reason": ...} on stdout with
-exit 0: that stops Claude from ending the turn and hands it the reason, without
-the error-styled stderr output that exit 2 prints in the terminal.
+Short replies are exempt: below conf["min_chars"] nothing is checked.
 
 stdin is decoded as UTF-8 explicitly: on Windows Python defaults to cp1252, which
 garbles non-ASCII replies (wrong lengths) or fails on some bytes.
 
-Only structure is checked here. "Plain words" and "every bullet names its own
-subject" are not machine-checkable -- a regex for "the logging" would misfire on
-every well-written bullet -- so that half of the rule lives in tldr_switch.py,
-which injects it before the turn.
-
 Stop hooks hold the spinner until they exit -- keep this fast.
 """
-import hashlib, json, os, re, sys
+import json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tldr_conf
 
-FLAG      = os.path.join(tldr_conf.HOOK_DIR, "tldr-gate.flag")
-LOG       = os.path.join(tldr_conf.HOOK_DIR, "tldr-hook.log")
-STATE_DIR = os.path.join(os.environ.get("TEMP", tldr_conf.HOOK_DIR), "tldr-gate")
+FLAG = os.path.join(tldr_conf.HOOK_DIR, "tldr-gate.flag")
+LOG  = os.path.join(tldr_conf.HOOK_DIR, "tldr-hook.log")
 
 CANONICAL = "**TL;NR**"
 # Accept either spelling, so the gate never rejects a block over a variant of
@@ -135,24 +129,6 @@ def violations(msg, cfg):
     return errs
 
 
-def retries_exhausted(session_id, msg, cfg):
-    """Count re-rolls per distinct response so an unsatisfiable rule cannot loop."""
-    key = hashlib.sha1((session_id + msg).encode("utf-8", "replace")).hexdigest()[:16]
-    os.makedirs(STATE_DIR, exist_ok=True)
-    path = os.path.join(STATE_DIR, key)
-    n = 0
-    if os.path.exists(path):
-        try:
-            n = int(open(path).read().strip() or 0)
-        except ValueError:
-            n = 0
-    if n >= cfg["max_retries"]:
-        return True
-    with open(path, "w") as fh:
-        fh.write(str(n + 1))
-    return False
-
-
 def note(msg):
     """One line per decision, so a surprise block can be traced to what was measured."""
     try:
@@ -176,31 +152,8 @@ def main():
     msg = data.get("last_assistant_message") or ""
     chars, est_tokens = measure(msg)
     errs = violations(msg, cfg) if chars >= cfg["min_chars"] else []
-    note("gate session=%s chars=%d active=%s errs=%d tail=%r"
-         % (str(data.get("session_id", "?"))[:8], chars,
-            data.get("stop_hook_active"), len(errs), msg.strip()[-60:]))
-
-    if not errs:                          # short reply, or a valid block
-        sys.exit(0)
-
-    if retries_exhausted(data.get("session_id", ""), msg, cfg):
-        print(json.dumps({"systemMessage":
-                          "TL;NR gate: giving up after %d attempts." % cfg["max_retries"]}))
-        sys.exit(0)
-
-    reason = ("Your last response is %d characters (~%d tokens), over the %d-character "
-              "threshold, so it needs a summary block. Re-send the SAME answer, then a "
-              "blank line, then this at the very end with nothing after it:" % (chars, est_tokens, cfg["min_chars"])
-              + chr(10) * 2 + CANONICAL + chr(10) +
-              "- name the subject inside the bullet, then say what is true of it"
-              + chr(10) +
-              "- essential facts only, readable with no body and no earlier turns"
-              + chr(10) +
-              "- Ask: <only when the answer needs something back; name the options>"
-              + chr(10) * 2 +
-              "Problems found:" + chr(10) + "- " + (chr(10) + "- ").join(errs))
-
-    print(json.dumps({"decision": "block", "reason": reason}))
+    note("gate session=%s chars=%d tokens~%d errs=%r tail=%r"
+         % (str(data.get("session_id", "?"))[:8], chars, est_tokens, errs, msg.strip()[-60:]))
     sys.exit(0)
 
 
