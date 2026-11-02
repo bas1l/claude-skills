@@ -1,0 +1,255 @@
+"""Turn labelled entries into text for reading, cut to size and split into chunks.
+
+Assistant text is complete. Tool calls and results are cut to ``tool_chars``, subagent
+and teammate reports to ``report_chars``. Subagent files contribute only the user's
+messages to teammates; their tool activity is counted by ``counts.py``.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable
+
+import transcripts as t
+from config import CutsConfig, SecretsConfig
+
+# Kinds a script counts and the model never reads.
+SCRIPT_ONLY_KINDS = frozenset({t.MODEL_USAGE, t.STOP_HOOK_SUMMARY, t.API_ERROR})
+
+# Kinds that make up the user's timeline, including the labelled non-own kinds, so a
+# reader of any chunk can see what the user pasted, accepted or interrupted.
+TIMELINE_KINDS = t.USER_REACTION_KINDS | {t.USER_PASTED, t.USER_ACCEPTED_SUGGESTION, t.USER_INTERRUPT}
+
+_FIXED_LABELS = {
+    t.USER_TYPED: "USER-TYPED",
+    t.USER_QUEUED: "USER-TYPED-WHILE-WORKING",
+    t.USER_ANSWER: "USER-ANSWER",
+    t.USER_CHOSE_OPTION: "USER-CHOSE-OPTION (model words)",
+    t.USER_REJECTION: "USER-REJECTED-TOOL-CALL",
+    t.USER_TO_TEAMMATE: "USER-TO-TEAMMATE",
+    t.USER_PASTED: "USER-PASTED (not the user's own words)",
+    t.USER_ACCEPTED_SUGGESTION: "USER-ACCEPTED-SUGGESTION (model words)",
+    t.USER_INTERRUPT: "USER-INTERRUPT",
+    t.ASSISTANT_TEXT: "ASSISTANT-TEXT",
+    t.SUBAGENT_REPORT: "SUBAGENT-REPORT",
+    t.SUBAGENT_PROMPT: "SUBAGENT-PROMPT",
+    t.COORDINATOR_MESSAGE: "COORDINATOR-MESSAGE",
+    t.TEAMMATE_MESSAGE: "TEAMMATE-MESSAGE",
+    t.COMPACT_SUMMARY: "COMPACT-SUMMARY (model words)",
+    t.SCRIPTED_PROMPT: "SCRIPTED-PROMPT",
+    t.LOCAL_COMMAND: "LOCAL-COMMAND",
+    t.INJECTED_SKILL: "INJECTED-SKILL",
+    t.SYSTEM_TEXT: "SYSTEM-TEXT",
+    t.HOOK_FEEDBACK: "HOOK-FEEDBACK",
+    t.HOOK_MESSAGE: "HOOK-MESSAGE",
+}
+_TOOL_LABELS = {
+    t.TOOL_CALL: "TOOL-CALL",
+    t.TOOL_RESULT: "TOOL-RESULT",
+    t.TOOL_ERROR: "TOOL-ERROR",
+    t.HOOK_BLOCK: "HOOK-BLOCK",
+    t.HOOK_ERROR: "HOOK-ERROR",
+    t.HOOK_CANCELLED: "HOOK-CANCELLED",
+    t.HOOK_OK: "HOOK-OK",
+}
+
+# Anywhere in a text, so that a space or a lone carriage return in front does not get it past.
+_ENTRY_HEADER_RE = re.compile(r"={3,}\s*\[")
+# Every tag a prompt frames data with. Text holding one could otherwise end its own frame.
+FRAME_TAGS = (
+    "session_part", "user_timeline", "memories", "memory", "declined", "notes", "source", "session", "existing_items",
+    "hook_settings", "failures", "procedures", "files", "file", "signals", "unit", "cluster", "known_items", "items", "item", "stances",
+)
+_FRAME_TAG_RE = re.compile(rf"<(\s*/?\s*(?:{'|'.join(FRAME_TAGS)})\b)", re.I)
+
+
+@dataclass(frozen=True)
+class RenderedEntry:
+    kind: str
+    timestamp: datetime
+    text: str
+
+
+@dataclass(frozen=True)
+class Chunk:
+    number: int
+    total: int
+    entries_text: str
+    first_timestamp: datetime
+    last_timestamp: datetime
+    entry_count: int
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.entries_text.encode("utf-8")).hexdigest()
+
+
+def _label(entry: t.Entry) -> str:
+    if entry.kind in _FIXED_LABELS:
+        return _FIXED_LABELS[entry.kind]
+    if entry.kind in _TOOL_LABELS:
+        return f"{_TOOL_LABELS[entry.kind]} {entry.tool_name}"
+    if entry.kind == t.TOOL_DENIED:
+        return f"TOOL-DENIED:{entry.denial_kind} {entry.tool_name}"
+    raise ValueError(f"no label for entry kind {entry.kind!r}")
+
+
+def _limit(entry: t.Entry, cuts: CutsConfig) -> int | None:
+    """The cut for an entry, or None where the text stays complete."""
+    if entry.kind in (t.TOOL_CALL, t.TOOL_RESULT, t.TOOL_ERROR, t.TOOL_DENIED):
+        return cuts.report_chars if entry.tool_name in cuts.report_tools else cuts.tool_chars
+    if entry.kind in (t.SUBAGENT_REPORT, t.TEAMMATE_MESSAGE, t.COORDINATOR_MESSAGE, t.SUBAGENT_PROMPT):
+        return cuts.report_chars
+    if entry.kind == t.USER_PASTED:
+        return cuts.pasted_chars
+    if entry.kind == t.COMPACT_SUMMARY:
+        return cuts.compact_summary_chars
+    if entry.kind in (t.SYSTEM_TEXT, t.SCRIPTED_PROMPT, t.LOCAL_COMMAND, t.INJECTED_SKILL):
+        return cuts.system_chars
+    if entry.kind in (t.HOOK_FEEDBACK, t.HOOK_BLOCK, t.HOOK_ERROR, t.HOOK_CANCELLED, t.HOOK_OK, t.HOOK_MESSAGE):
+        return cuts.hook_chars
+    return None
+
+
+def cut_text(text: str, limit: int | None) -> str:
+    if limit is None or len(text) <= limit:
+        return text
+    return f"{text[:limit]} ...[CUT {len(text) - limit} chars]"
+
+
+def redact_counted(text: str, secrets: SecretsConfig) -> tuple[str, int]:
+    """The text with every secret pattern replaced, and how many matches there were."""
+    total = 0
+    for name, pattern in secrets.patterns:
+        text, matches = re.subn(pattern, f"[REDACTED-{name}]", text)
+        total += matches
+    return text, total
+
+
+def redact_secrets(text: str, secrets: SecretsConfig) -> str:
+    return redact_counted(text, secrets)[0]
+
+
+def redact_keeping_lines(text: str, secrets: SecretsConfig) -> tuple[str, int]:
+    """Like ``redact_counted``, with as many lines as before, for text cited by line number."""
+    total = 0
+    for name, pattern in secrets.patterns:
+        label = f"[REDACTED-{name}]"
+        text, matches = re.subn(pattern, lambda match: label + "\n" * match.group(0).count("\n"), text)
+        total += matches
+    return text, total
+
+
+def neutralise_tags(text: str) -> str:
+    """Text that cannot open or close a tag its prompt frames data with."""
+    return _FRAME_TAG_RE.sub(lambda match: f"&lt;{match.group(1)}", text)
+
+
+def _clean(text: str) -> str:
+    """Make text safe to send: lone surrogates become U+FFFD, and nothing in the text can pose
+    as an entry header or as a tag of the frame around it."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
+    return neutralise_tags(_ENTRY_HEADER_RE.sub("=== (", text))
+
+
+def is_read_by_model(entry: t.Entry) -> bool:
+    if entry.kind in SCRIPT_ONLY_KINDS:
+        return False
+    return entry.source == "main" or entry.kind == t.USER_TO_TEAMMATE
+
+
+def render_entries(entries: Iterable[t.Entry], cuts: CutsConfig, secrets: SecretsConfig) -> list[RenderedEntry]:
+    """Render what the model reads, in time order. Repeated hook successes appear once."""
+    selected = sorted((e for e in entries if is_read_by_model(e)), key=lambda e: e.timestamp)
+    seen_hook_prefixes: set[str] = set()
+    rendered = []
+    for entry in selected:
+        if entry.kind == t.HOOK_OK:
+            prefix = entry.text[: cuts.hook_repeat_prefix_chars]
+            if prefix in seen_hook_prefixes or not entry.text.strip():
+                continue
+            seen_hook_prefixes.add(prefix)
+        # Redaction comes before the cut, or a token across the cut would no longer match.
+        body = cut_text(redact_secrets(entry.text, secrets), _limit(entry, cuts))
+        if entry.context:
+            body = f"(asked: {cut_text(redact_secrets(entry.context, secrets), cuts.tool_chars)})\n{body}"
+        body = _clean(body)
+        stamp = entry.timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+        rendered.append(RenderedEntry(entry.kind, entry.timestamp, f"\n=== [{_label(entry)}] {stamp}\n{body}"))
+    return rendered
+
+
+def build_timeline(rendered: Iterable[RenderedEntry]) -> str:
+    """Every user message in order, for orientation in each chunk."""
+    return "".join(entry.text for entry in rendered if entry.kind in TIMELINE_KINDS)
+
+
+def split_into_chunks(rendered: list[RenderedEntry], chunk_chars: int) -> list[Chunk]:
+    """Split on entry boundaries into chunks of at most ``chunk_chars``.
+
+    An entry longer than ``chunk_chars`` is kept whole in a chunk of its own, because
+    assistant text is never cut.
+    """
+    if chunk_chars <= 0:
+        raise ValueError(f"chunk_chars must be positive: {chunk_chars}")
+    groups: list[list[RenderedEntry]] = []
+    current: list[RenderedEntry] = []
+    size = 0
+    for entry in rendered:
+        if current and size + len(entry.text) > chunk_chars:
+            groups.append(current)
+            current = []
+            size = 0
+        current.append(entry)
+        size += len(entry.text)
+    if current:
+        groups.append(current)
+    return [
+        Chunk(
+            number=number,
+            total=len(groups),
+            entries_text="".join(entry.text for entry in group),
+            first_timestamp=group[0].timestamp,
+            last_timestamp=group[-1].timestamp,
+            entry_count=len(group),
+        )
+        for number, group in enumerate(groups, 1)
+    ]
+
+
+def chunk_input_text(chunk: Chunk, timeline: str, known_items: str) -> str:
+    """The text one model call reads: the names it may use, the user's timeline, then this part of
+    the session. What changes least comes first, and the list is the same for a project's chunks."""
+    return (
+        f"<known_items>\n{neutralise_tags(known_items)}\n</known_items>\n\n"
+        "<user_timeline note=\"All the user's messages in this window, for context. "
+        "Covers more than this part.\">"
+        f"{timeline}\n</user_timeline>\n\n"
+        f"<session_part number=\"{chunk.number}\" of=\"{chunk.total}\">"
+        f"{chunk.entries_text}\n</session_part>\n"
+    )
+
+
+def render_exchanges(entries: Iterable[t.Entry], cuts: CutsConfig, secrets: SecretsConfig, assistant_chars: int) -> str:
+    """Each of the user's messages with the end of the assistant text just before it.
+
+    This is enough source for a reader to quote the user and to name what the user reacted
+    to. Assistant text is cut to its last ``assistant_chars``, where a statement that invites
+    a reaction usually sits.
+    """
+    if assistant_chars <= 0:
+        raise ValueError(f"assistant_chars must be positive: {assistant_chars}")
+    parts = []
+    pending = ""
+    for entry in render_entries(entries, cuts, secrets):
+        if entry.kind == t.ASSISTANT_TEXT:
+            pending = entry.text
+        elif entry.kind in t.USER_REACTION_KINDS:
+            if pending:
+                cut = len(pending) - assistant_chars
+                parts.append(pending if cut <= 0 else f"\n=== [ASSISTANT-TEXT] ...[CUT {cut} chars]\n{pending[cut:]}")
+                pending = ""
+            parts.append(entry.text)
+    return "".join(parts)
