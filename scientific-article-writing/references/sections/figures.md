@@ -64,7 +64,7 @@ one panel at round 9 (7 versions) after several single-figure rounds.
 - Include the current figure, if there is one, as `P00`, pinned for comparison. Several figures
   can run at once, one agent and one gallery each (Figures 1, 2 and 3 on 2026-10-20).
 - Build the gallery in a durable folder that the project allows, beside but outside the published
-  and staged figures (the October galleries sat in `04_Figures\swedish_02\figureN_gallery_<date>\`).
+  and staged figures (for example `<figures folder>\figureN_gallery_<date>\`).
   Nothing goes into the manuscript or staged folders before a choice.
 - Put the house constraints in the agent prompt explicitly, since subagents do not inherit them:
   - draw only through the repository presentation layer (style, palette, labels, grids,
@@ -194,7 +194,7 @@ good. Branch this one in", 2026-10-21).
   the paper may use.
 - Keep the manuscript's gallery index (absolute path, date, session, what it covers, how many
   figures, what was chosen) current whenever a gallery is created or a choice is made.
-- Warn every time that session scratchpads under `C:\Users\basil\AppData\Local\Temp\claude\...`
+- Warn every time that session scratchpads under `%USERPROFILE%\AppData\Local\Temp\claude\...`
   are volatile (Disk Cleanup, Storage Sense) and recommend copying chosen figures and their final
   folders somewhere durable. This has happened: the September typicality, severity and driver
   gallery pages were gone from their indexed paths by 2026-11-01.

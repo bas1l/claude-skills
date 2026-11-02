@@ -11,10 +11,10 @@ chat.json schema
 {
   "title": "Project X - kickoff",
   "messages": [
-    { "sender": "Irene Perini",
+    { "sender": "Alex Sample",
       "date":   "2026-06-18",          ISO, used for the date separators
       "time":   "14:59",               as printed in the message header
-      "domain": "liu.se",              sender's email domain, drives the side split
+      "domain": "example.org",         sender's email domain, drives the side split
       "blocks": [
         {"type": "text",  "value": "Dear all,"},
         {"type": "ref",   "value": "pubmed.ncbi.nlm.nih.gov/28213645/"},

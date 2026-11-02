@@ -74,11 +74,11 @@ layout it produces, per conversation:
 
 ```
 <session folder>\
-    2026-08-03_Potential artifact help\        <- extracted .msg, one per message
-        2026-08-03_1337_Irene Perini.msg
-        2026-08-05_0910_do Nascimento Arantes Adryelle.msg
+    2026-08-03_Project X kickoff\        <- extracted .msg, one per message
+        2026-08-03_1337_Alex Sample.msg
+        2026-08-05_0910_Example Robin.msg
         ...
-    2026-08-03_Potential artifact help.docx    <- the transcript
+    2026-08-03_Project X kickoff.docx    <- the transcript
 ```
 
 The base name is `<date of the FIRST message>_<conversation title>`, sanitised, and the
@@ -162,7 +162,7 @@ trailers, only judging what to keep. Verify rather than trust:
 - `own/full` char counts show how much was trimmed.
 - `*** BRANCH ***` marks a message replying to something other than the one above it. Give
   each of those a `note` block naming its real parent, e.g.
-  `[Replies to Irene's 14:28 message, in parallel with Bo Wahlström's reply]`. A flat
+  `[Replies to Alex's 14:28 message, in parallel with Robin Example's reply]`. A flat
   transcript otherwise reads it as a direct reply, which is exactly wrong on the threads this
   route exists to capture.
 - Autoreplies are flagged `auto_reply`. Render as a one-line `note`, not a bubble.
@@ -204,12 +204,12 @@ Read `thread.txt` and `manifest.json`. Write `chat.json` into the same working d
 
 ```json
 {
-  "title": "TILA2 — temporal interference / fMRI",
+  "title": "Project X - kickoff",
   "messages": [
-    { "sender": "Irene Perini",
+    { "sender": "Alex Sample",
       "date":   "2026-06-18",
       "time":   "14:59",
-      "domain": "liu.se",
+      "domain": "example.org",
       "blocks": [
         {"type": "text",  "value": "Dear all,"},
         {"type": "ref",   "value": "pubmed.ncbi.nlm.nih.gov/28213645/"},
@@ -241,7 +241,7 @@ email domain; it drives the left/right split, so fill it in for every message.
    `Von:/Gesendet:/Betreff:`, `De:/Envoyé:/Objet:`, and `On <date>, <name> wrote:` — a
    single thread can mix languages when participants use different Outlook locales. This is
    precisely why segmentation is your job and not a regex's.
-4. **Keep greetings, drop closings.** "Dear Uta and Ines," records who was addressed in a
+4. **Keep greetings, drop closings.** "Dear Sam and Kim," records who was addressed in a
    multi-party thread and is worth keeping. Sign-offs, signature blocks, corporate legal
    footers, "Follow us on LinkedIn", ISO banners and address blocks all go.
 5. **Timestamps**: use the local time printed in each reply header. The outermost message
@@ -312,7 +312,7 @@ applied, page count. Never block mid-run to ask about any of this — mark it an
 | Single message, no reply history | Render as one bubble, and say the thread had nothing to flatten. |
 | More than 8 participants | Palette cycles; the renderer forces a single column. Nothing to do. |
 | Two people, one domain | Single column — a left/right split needs two domains. Expected, not a bug. |
-| Same sender, two name spellings ("Peter Lundberg" / "Lundberg, Peter") | Normalise to one form in `chat.json`, or they get two colours. |
+| Same sender, two name spellings ("Alex Sample" / "Sample, Alex") | Normalise to one form in `chat.json`, or they get two colours. |
 | Image referenced but absent | `note` block. Suggest the user request it from the sender. |
 | Thread over ~60 messages | Segment in passes of ~20 and concatenate the `messages` arrays before rendering. |
 
