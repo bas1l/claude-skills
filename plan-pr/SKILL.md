@@ -245,7 +245,7 @@ Rules:
 
 - **One plan:** the plan title, verbatim.
 - **Multiple plans:** a title covering both, derived from the branch name
-  (`feature/cap-population-to-n` → `Cap population to N`), with plan titles
+  (`feature/cap-batch-size-to-n` → `Cap batch size to N`), with plan titles
   listed in the body.
 - **No plan:** derive from the branch name.
 

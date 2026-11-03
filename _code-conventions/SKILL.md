@@ -39,8 +39,8 @@ Contracts* table). If a base class references a specific label or country, that 
 
 ### 4. Naming reflects what code acts on
 Functions and modules are named for **what they operate on**, not generically. E.g. a loader for
-synthetic vs database populations carries that in its name (`load_synthetic_population`, not
-`load_raw_population`). Analysis scripts are named/ordered so a user can read the pipeline from the
+simulated vs recorded sensor readings carries that in its name (`load_simulated_readings`, not
+`load_raw_readings`). Analysis scripts are named/ordered so a user can read the pipeline from the
 filenames.
 
 ### 5. One file, one concern

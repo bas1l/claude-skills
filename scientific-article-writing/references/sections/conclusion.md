@@ -108,7 +108,7 @@ reported from 26 to 84% (Chiu et al. 2017). Evidence that conclusions are where 
 - Corpus: at least one claim stronger than the evidence in 5/15 Conclusions, including highly
   cited ones.
 
-All three studies are biomedical; applying them to an ML benchmark is an analogy. Check the draft
+All three studies are biomedical; applying them to other fields is an analogy. Check the draft
 for: a conclusion more favourable than the results, extrapolation beyond the populations, models
 and settings tested, and recommendations the evidence does not support; "significantly" on any
 outcome that was not tested (one corpus Conclusion reports that a tool "significantly improved

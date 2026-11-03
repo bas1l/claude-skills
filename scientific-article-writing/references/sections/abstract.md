@@ -30,7 +30,7 @@ is revised then. Claim strength and citation checks are in `references/global.md
   4/15 (all JMLR) and the context move in 3/15. Every abstract has a methods and a results move
   (15/15) and 14/15 state an objective.
 - **Conclusion sentence in an ML venue**: 4 of the 5 JMLR abstracts end on a result or on what
-  else the paper does, not on what the result means. This paper keeps a closing sentence of what
+  else the paper does, not on what the result means. Keep a closing sentence of what
   the result means anyway, one sentence long, even at an ML venue where it is above the norm.
 - **Objective restates the aim**: the abstract objective restates the Introduction's aim
   sentence (`references/sections/introduction.md`), every aim included. In the corpus it mirrors
@@ -64,7 +64,7 @@ is revised then. Claim strength and citation checks are in `references/global.md
   does not apply. STROBE item 1b asks for "an informative and balanced summary of what was done
   and what was found", and STROBE lists a conference-abstracts checklist
   (https://www.strobe-statement.org/checklists/ ; the item wording is **snippet-level**). Use them
-  only as a completeness check by analogy; this paper is neither a trial nor an observational
+  only as a completeness check by analogy when a paper is neither a trial nor an observational
   study of people.
 
 ## 3. Content rules
@@ -72,9 +72,8 @@ is revised then. Claim strength and citation checks are in `references/global.md
 - **Main numbers with their comparator and uncertainty**: each headline rate or effect size is
   given with its comparator (the baseline, reference or earlier period it is measured against;
   13/15 in the corpus) and is the same value the Results report (ICMJE asks for specific effect
-  sizes). Add the interval or the test that backs it when the Results report one for that number;
-  in this paper they do, so include it. Only 5/15 corpus abstracts carry a CI or p value (Lancet
-  Digital Health 3, JAMIA Open 2, JMLR 0), so the interval is this paper's standard, not the
+  sizes). Add the interval or the test that backs it when the Results report one for that number. Only 5/15 corpus abstracts carry a CI or p value (Lancet
+  Digital Health 3, JAMIA Open 2, JMLR 0), so the interval is a house standard, not the
   venues' norm. Do not invent an interval the Results do not give. No number appears that the
   main text does not contain.
 - **No new information.** Abstracts with data that conflicted with the body, or that appeared
