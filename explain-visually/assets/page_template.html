@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+  :root { --blue:#0072B2; --orange:#D55E00; --sky:#56B4E9; --green:#009E73; --yellow:#E69F00; --grey:#8a8a8a; --page:#f7f1e3; --sand:#efe3c6; --line:#d3cab3; --head:#ece4d0; --ink:#222; }
+  * { box-sizing:border-box; }
+  body { font:17px/1.55 "Segoe UI",Arial,sans-serif; color:var(--ink); margin:0; background:var(--page); }
+  main { max-width:940px; margin:0 auto; padding:24px 22px 70px; }
+  h1 { font-size:27px; margin:0 0 10px; line-height:1.2; }
+  h2 { font-size:23px; margin:6px 0 8px; line-height:1.25; }
+  h3 { font-size:18px; margin:22px 0 4px; }
+  section { border-top:1px solid var(--line); padding:22px 0 8px; }
+  section.situation { border:1px solid var(--line); background:#fbf7ec; padding:12px 16px; margin:0 0 14px; }
+  .situation h2 { font-size:19px; margin:0 0 6px; }
+  .situation dl { margin:0; }
+  .situation dt { font-weight:600; margin-top:8px; }
+  .situation dd { margin:0; }
+  .answer { background:var(--sand); border-left:5px solid #333; padding:10px 14px; margin:14px 0 22px; font-weight:600; }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; border-bottom:2px solid #333; margin:16px 0 18px; }
+  .tabs button { font:inherit; font-size:15px; padding:8px 13px; border:1px solid #bbb; border-bottom:none; background:var(--head); cursor:pointer; border-radius:6px 6px 0 0; }
+  .tabs button.on { background:#333; color:#fff; border-color:#333; }
+  .tab { display:none; }
+  .tab.on { display:block; }
+  .ask { background:#eef6fb; border-left:5px solid var(--blue); padding:10px 14px; margin:10px 0 16px; font-weight:600; }
+  .context { margin:0 0 14px; }
+  .point { background:var(--sand); border-left:5px solid #d9a441; padding:10px 14px; margin:14px 0; }
+  .unknown { border-left:5px solid var(--grey); padding:6px 14px; margin:14px 0; }
+  .next { font-weight:600; margin:14px 0; }
+  .reply { border:1px solid var(--line); background:#fbf7ec; padding:10px 14px; margin:24px 0 0; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:10px; margin:4px 0; }
+  .tag.real { background:#d8ecf8; color:#004f7c; }
+  .tag.made { background:#e4dfd2; color:#555; }
+  svg { display:block; width:100%; height:auto; }
+  svg text { font-family:"Segoe UI",Arial,sans-serif; paint-order:stroke; stroke:var(--page); stroke-width:3px; }
+  svg text.nohalo { stroke:none; }
+  .clickable { cursor:pointer; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; font-size:15.5px; }
+  th,td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:var(--head); }
+  td.n,th.n { text-align:right; white-space:nowrap; }
+  tr.rec td { background:#e6f3e2; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; }
+  .row > div { flex:1 1 300px; min-width:0; }
+  .cap { font-size:14.5px; color:#444; margin:4px 0 12px; }
+  .small { font-size:14px; color:#555; }
+  .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:15px; margin:8px 0; }
+  .swatch { display:inline-block; width:15px; height:15px; margin-right:6px; vertical-align:-2px; border-radius:2px; }
+  button.pick { font:inherit; font-size:15px; padding:5px 13px; border:1px solid #999; background:var(--head); border-radius:5px; cursor:pointer; }
+  button.pick.on { background:#333; color:#fff; border-color:#333; }
+  code { font-size:13.5px; word-break:break-all; }
+  #page-error { background:#a00; color:#fff; padding:10px 14px; font-weight:600; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+<h1>__TITLE__</h1>
+__BODY__
+</main>
+<script>
+"use strict";
+window.addEventListener("error",e=>{const b=document.createElement("div");b.id="page-error";b.textContent="Page script error: "+e.message;document.body.prepend(b);});
+const D = __DATA__;
+const NS="http://www.w3.org/2000/svg", BLUE="#0072B2", ORANGE="#D55E00", SKY="#56B4E9", GREEN="#009E73", YELLOW="#E69F00", GREY="#8a8a8a", LIGHT="#d9d3c3";
+/* Stop the page loudly if a printed number no longer matches its computation. */
+function must(ok,msg){if(!ok)throw new Error("check failed: "+msg);}
+function el(t,a,p,x){const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);if(x!==undefined)n.textContent=x;if(p)p.appendChild(n);return n;}
+/* canvas() empties its container, so a click handler can redraw by calling it again. */
+function canvas(id,w,h){const c=document.getElementById(id);if(!c)throw new Error("missing "+id);c.replaceChildren();return el("svg",{viewBox:`0 0 ${w} ${h}`},c);}
+function axes(s,X,Y,xt,yt,xl,yl,w,h,L,T,B){
+  el("line",{x1:L,x2:w-16,y1:h-B,y2:h-B,stroke:"#555"},s); el("line",{x1:L,x2:L,y1:T,y2:h-B,stroke:"#555"},s);
+  xt.forEach(v=>{el("line",{x1:X(v),x2:X(v),y1:h-B,y2:h-B+5,stroke:"#555"},s);el("text",{x:X(v),y:h-B+20,"text-anchor":"middle","font-size":13},s,v);});
+  yt.forEach(v=>{el("line",{x1:L-5,x2:L,y1:Y(v),y2:Y(v),stroke:"#555"},s);el("text",{x:L-9,y:Y(v)+4,"text-anchor":"end","font-size":13},s,v);});
+  el("text",{x:(L+w-16)/2,y:h-8,"text-anchor":"middle","font-size":14},s,xl);
+  el("text",{x:16,y:(T+h-B)/2,"text-anchor":"middle","font-size":14,transform:`rotate(-90 16 ${(T+h-B)/2})`},s,yl);
+}
+/* plot() = canvas + linear scales + axes. Returns {s,X,Y,w,h,L,T,B}. */
+function plot(id,o){const {x0,x1,y0,y1,xt,yt,xl,yl,w=880,h=340,L=62,T=18,B=48}=o;
+  const X=v=>L+(v-x0)/(x1-x0)*(w-16-L),Y=v=>h-B-(v-y0)/(y1-y0)*(h-B-T),s=canvas(id,w,h);
+  axes(s,X,Y,xt,yt,xl,yl,w,h,L,T,B);return {s,X,Y,w,h,L,T,B};}
+/* Tabs exist only if the body contains #tabs. The hash opens a tab directly: page.html#t2 */
+const tabButtons=[...document.querySelectorAll("#tabs button")];
+function show(t){must(document.getElementById(t),"no tab "+t);tabButtons.forEach(b=>b.classList.toggle("on",b.dataset.t===t));document.querySelectorAll(".tab").forEach(e=>e.classList.toggle("on",e.id===t));}
+tabButtons.forEach(b=>b.addEventListener("click",()=>show(b.dataset.t)));
+if(tabButtons.length)show(location.hash?location.hash.slice(1):tabButtons[0].dataset.t);
+</script>
+<script>
+__FIGURES_JS__
+</script>
+</body>
+</html>
