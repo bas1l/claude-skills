@@ -14,8 +14,10 @@ earlier passes, so that they stay alike across passes. A long list is split by `
 
 Verdicts stay in ``stance-checks.json`` beside the notes of their window, so discarding a window takes
 them along, and a stance judged once is not judged again. A stance with no verdict yet makes no entry
-and waits for the next pass. A call that fails leaves its stances waiting, and what earlier calls settled
-stays. A verdict that does not fit its stance fails the call the same way.
+and waits for the next pass. A call that fails, or a reply that does not answer each stance sent exactly
+once, leaves its stances waiting, and what earlier calls settled stays. A verdict that does not fit its
+stance is dropped alone: a script cannot tell which half of it was meant, so its stance waits too, the rest
+of the reply is stored, and the run ends failed with the verdict listed.
 
 The model comes from config: ``item_check.model``. See ``docs/verification.md`` for the two compared.
 """
@@ -144,22 +146,33 @@ def _verdict_problem(verdict: schemas.StanceVerdict, mention: ledger.StanceMenti
     return None
 
 
-def _checked_verdicts(text: str, group: Sequence[ledger.StanceMention]) -> dict[str, schemas.StanceVerdict]:
+def _checked_verdicts(text: str, group: Sequence[ledger.StanceMention]) -> tuple[dict[str, schemas.StanceVerdict], dict[str, str]]:
+    """The verdicts that fit, by id, and what is wrong with each that does not. Raises if the reply is
+    not one answer to each stance sent."""
     verdicts = schemas.parse_stance_verdicts(text)
     by_id = {verdict.id: verdict for verdict in verdicts}
     wanted = {f"s{position}" for position in range(1, len(group) + 1)}
     if len(verdicts) != len(by_id) or set(by_id) != wanted:
         raise schemas.SchemaError(f"the stance check must answer each stance once: expected {len(wanted)}, got ids {sorted(by_id)}")
+    problems: dict[str, str] = {}
     for position, mention in enumerate(group, 1):
         problem = _verdict_problem(by_id[f"s{position}"], mention)
         if problem is not None:
-            raise schemas.SchemaError(f"stance verdict s{position}: {problem}")
-    return by_id
+            problems[f"s{position}"] = problem
+    return {key: verdict for key, verdict in by_id.items() if key not in problems}, problems
 
 
-def check_pending(config: Config, run_id: str, budget_usd: float, call: Callable[..., model_call.ModelResult]) -> dict[str, Any]:
-    """Judge every stance with no verdict yet. Raises if a call or its reply fails: what that call was
-    given stays unjudged, and what earlier calls settled stays."""
+def dropped_line(dropped: Sequence[Mapping[str, Any]]) -> str:
+    """How many, which and why, in one line. An id means something only within its call."""
+    return f"{len(dropped)} stance verdicts dropped: " + "; ".join(f"call {item['call']} {item['id']}: {item['problem']}" for item in dropped)
+
+
+def check_pending(
+    config: Config, run_id: str, budget_usd: float, call: Callable[..., model_call.ModelResult], dropped: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Judge every stance with no verdict yet. A verdict that does not fit its stance goes on ``dropped``,
+    which holds it even if a later call raises, and the rest of its reply is stored. Raises if a call or
+    its reply fails: what that call was given stays unjudged, and what earlier calls settled stays."""
     data_dir = config.paths.data_dir
     ledgers_dir = ledger.ledgers_dir_of(data_dir)
     synced = backfill.sync_items(config, datetime.now(timezone.utc))  # An item new today needs its ledger to be resolved.
@@ -167,7 +180,7 @@ def check_pending(config: Config, run_id: str, budget_usd: float, call: Callable
     notes_dir = os.path.join(data_dir, "notes")
     pending = list(ledger.pending_stances(notes_dir, ledgers_dir, backfill.display_names(found)))
     summary = {
-        "stances_checked": len(pending), "calls": 0, "cost_usd": 0.0, "input_chars": 0, "rule_broken": 0, "malfunction": 0,
+        "stances_checked": len(pending), "calls": 0, "cost_usd": 0.0, "input_chars": 0, "rule_broken": 0, "malfunction": 0, "dropped": 0,
         **dict.fromkeys(schemas.STANCE_VERDICTS, 0),
         ledger.OUTCOME_CREATED: synced[ledger.OUTCOME_CREATED], ledger.OUTCOME_CASE_RENAMED: synced[ledger.OUTCOME_CASE_RENAMED],
     }
@@ -176,6 +189,16 @@ def check_pending(config: Config, run_id: str, budget_usd: float, call: Callable
     known = _known_by_identity(found)
     rulings = ledger.earlier_rulings(notes_dir, config.item_check.earlier_rulings_shown)
     prompt = _read_prompt()
+    rejected_written = False
+
+    def log_rejected(text: str) -> None:
+        """A run's rejected replies stay together, and replace those of an earlier run."""
+        nonlocal rejected_written
+        mode, start = ("a", "\n") if rejected_written else ("w", "")
+        with open(os.path.join(data_dir, "logs", REJECTED_REPLY), mode, encoding="utf-8") as handle:
+            handle.write(start + render.redact_secrets(text, config.secrets))
+        rejected_written = True
+
     for group in _groups(pending, known, rulings, config):
         sent, _ = render.redact_counted(stance_input(group, known, rulings, config), config.secrets)
         summary["input_chars"] += len(sent)
@@ -194,14 +217,27 @@ def check_pending(config: Config, run_id: str, budget_usd: float, call: Callable
         summary["cost_usd"] += result.cost_usd
         summary["calls"] += 1
         try:
-            by_id = _checked_verdicts(result.text, group)
+            by_id, problems = _checked_verdicts(result.text, group)
         except schemas.SchemaError:
-            with open(os.path.join(data_dir, "logs", REJECTED_REPLY), "w", encoding="utf-8") as handle:
-                handle.write(render.redact_secrets(result.text, config.secrets))
+            log_rejected(result.text)
             raise
+        if problems:
+            log_rejected(result.text)
         by_window: dict[str, dict[str, dict[str, Any]]] = {}
         for position, mention in enumerate(group, 1):
-            verdict = by_id[f"s{position}"]
+            stance_id = f"s{position}"
+            if stance_id in problems:
+                summary["dropped"] += 1
+                dropped.append({
+                    "call": summary["calls"],
+                    "id": stance_id,
+                    "kind": mention.item.kind,
+                    "name": mention.item.name,
+                    "stance_at": f"{os.path.relpath(mention.window_dir, notes_dir).replace(os.sep, '/')}/{mention.key}",
+                    "problem": problems[stance_id],
+                })
+                continue
+            verdict = by_id[stance_id]
             summary[verdict.verdict] += 1
             summary["rule_broken"] += verdict.rule_broken
             summary["malfunction"] += verdict.malfunction

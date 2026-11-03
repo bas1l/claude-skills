@@ -80,6 +80,7 @@ import research
 import review_data
 import schemas
 import sessions
+import stance_check
 import transcripts
 import weekly_gate
 import weekly_notes
@@ -967,6 +968,7 @@ def run_weekly(
         "apply_enabled": local.apply_memory_changes,
         "budget_stopped": False,
         "failed_sessions": [],
+        "dropped_verdicts": [],
         "item_problems": [],
         "possible_renames": [],
         "backlog_sessions": [],
@@ -999,6 +1001,7 @@ def run_weekly(
         daily_cost = daily_result["cost_usd"]
         result["daily"] = {key: daily_result[key] for key in ("status", "stop_reason", "sessions_read", "notes", "cost_usd")}
         result["failed_sessions"] = daily_result["failed_sessions"]
+        result["dropped_verdicts"] = daily_result["dropped_verdicts"]
         result["backlog_sessions"] = daily_result["backlog_sessions"]
         result["windows_reset"] = daily_result["windows_reset"]
         result["secrets_redacted"] = daily_result["secrets_redacted"]
@@ -1035,6 +1038,10 @@ def run_weekly(
     held_problems = ledger.read_item_problems(ledger.ledgers_dir_of(config.paths.data_dir))
     result["item_problems"] = held_problems["problems"]
     result["possible_renames"] = held_problems["possible_renames"]
+    if result["status"] == STATUS_OK and result["dropped_verdicts"]:
+        # The pass did its work, and the review page says "did not finish" when it is given no reason.
+        result["status"] = STATUS_FAILED
+        result["stop_reason"] = f"the daily pass: {stance_check.dropped_line(result['dropped_verdicts'])}"
     if result["status"] == STATUS_OK and (result["failed_sessions"] or result["item_problems"]):
         result["status"] = STATUS_FAILED
 

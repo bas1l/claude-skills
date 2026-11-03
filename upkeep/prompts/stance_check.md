@@ -48,7 +48,7 @@ For each line, give exactly one:
 - `raised`: it was `no_bearing`, and the note and the item show what `for` or `against` needs.
 - `lowered`: it was `for` or `against`, and the item did play a part, but what the note shows falls short. It becomes `no_bearing`.
 - `refused`: it was `for` or `against`, and the item had no part in this, or it is one of the cases listed under `no_bearing`. It becomes `no_bearing`.
-- `reversed`: it was `for` and the note shows `against`, or the other way round.
+- `reversed`: it was `for` and the note shows `against`, or the other way round. The stance after it is the opposite one, never `no_bearing`: a `for` or `against` that merely does not hold is `lowered` or `refused`.
 
 ## Three more things to say
 
