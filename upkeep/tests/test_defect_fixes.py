@@ -318,7 +318,7 @@ def test_criterion_4_a_good_quote_is_applied_with_the_quote_in_the_file(tree):
 def failed_daily(config, run_id, call=None):
     return {
         "status": "failed", "stop_reason": None, "budget_stopped": False, "sessions_read": 0, "notes": 0, "cost_usd": 0.0,
-        "failed_sessions": [{"session": "proj/broken", "error": "made up"}], "backlog_sessions": [], "windows_reset": [],
+        "failed_sessions": [{"session": "proj/broken", "error": "made up"}], "dropped_verdicts": [], "backlog_sessions": [], "windows_reset": [],
         "secrets_redacted": 0, "memory_snapshot": {"errors": []},
     }
 

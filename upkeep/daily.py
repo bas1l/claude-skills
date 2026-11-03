@@ -15,6 +15,10 @@ What stops a run, and what does not:
     TranscriptFormatError, SchemaError, a call timeout
                            that session only: listed with its id, left unprocessed, the others
                            continue, and the run ends failed with a non-zero exit
+    a stance verdict that does not fit its stance
+                           that verdict only: listed under ``dropped_verdicts``, its stance waits for
+                           the next run, the rest continues, and the run ends failed with a non-zero
+                           exit, with no ``stop_reason`` for it alone, since the weekly pass stops on one
 
 A window whose records changed after an interruption no longer matches its recorded chunks.
 Its partial results and the ledger entries drawn from them are discarded, and the window is
@@ -293,13 +297,16 @@ def run_daily(
         stop_reason = f"{type(error).__name__}: {error}"
 
     stance_summary: Optional[dict[str, Any]] = None
+    dropped_verdicts: list[dict[str, Any]] = []
     if stop_reason is None and not budget_stopped:
         try:
-            stance_summary = stance_check.check_pending(config, run_id, config.model.run_budget_usd - totals.cost_usd, totals.wrap(call, ledger.STANCE_USAGE_KEY))
+            stance_summary = stance_check.check_pending(config, run_id, config.model.run_budget_usd - totals.cost_usd, totals.wrap(call, ledger.STANCE_USAGE_KEY), dropped_verdicts)
         except model_call.BudgetExhaustedError:
             budget_stopped = True
         except (model_call.ModelCallError, schemas.SchemaError, ledger.LedgerError, backfill.InventoryError, subprocess.TimeoutExpired) as error:
             stop_reason = f"stance check: {type(error).__name__}: {error}"
+            if dropped_verdicts:
+                stop_reason = f"{stop_reason}; {stance_check.dropped_line(dropped_verdicts)}"
 
     ledger_summary: Optional[dict[str, Any]] = None
     try:
@@ -313,7 +320,7 @@ def run_daily(
         ledger_summary["ledgers_renamed_in_case"] += stance_summary[ledger.OUTCOME_CASE_RENAMED]
 
     held = ledger.read_item_problems(ledger.ledgers_dir_of(config.paths.data_dir))
-    if stop_reason is not None or failed or snapshot["errors"] or held["problems"]:
+    if stop_reason is not None or failed or snapshot["errors"] or held["problems"] or dropped_verdicts:
         status = STATUS_FAILED
     elif budget_stopped:
         status = STATUS_BUDGET_STOPPED
@@ -332,6 +339,7 @@ def run_daily(
         "sessions_read": processed_read,
         "sessions_count_only": processed_count_only,
         "failed_sessions": failed,
+        "dropped_verdicts": dropped_verdicts,
         "item_problems": held["problems"],
         "possible_renames": held["possible_renames"],
         "backlog_sessions": backlog,

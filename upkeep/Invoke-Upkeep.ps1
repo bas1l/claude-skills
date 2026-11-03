@@ -235,7 +235,8 @@ try {
             Add-MarkerEntry $markerPath 'budget_stopped' "$Pass pass stopped at its budget; $(@($result.backlog_sessions).Count) sessions wait for the next run." $exitCode $resultPath $result
         } else {
             $items = if ($result.PSObject.Properties['item_problems']) { @($result.item_problems).Count } else { 0 }
-            $why = if ($result.stop_reason) { "stopped: $($result.stop_reason)" } else { "$(@($result.failed_sessions).Count) sessions and $(@($result.memory_snapshot.errors).Count) memory folders failed, and $items items could not be read" }
+            $dropped = if ($result.PSObject.Properties['dropped_verdicts']) { @($result.dropped_verdicts).Count } else { 0 }
+            $why = if ($result.stop_reason) { "stopped: $($result.stop_reason)" } else { "$(@($result.failed_sessions).Count) sessions and $(@($result.memory_snapshot.errors).Count) memory folders failed, $items items could not be read, and $dropped stance verdicts were dropped" }
             Add-MarkerEntry $markerPath 'failed' "$Pass pass failed, $why" $exitCode $resultPath $result
         }
         if ($null -ne $result -and @($result.windows_reset).Count -gt 0) {

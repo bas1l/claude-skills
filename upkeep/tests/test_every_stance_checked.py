@@ -121,7 +121,7 @@ def test_a_verdict_that_does_not_fit_its_stance_fails_the_pass_and_records_nothi
     write_inventory(tree)
     result = run_daily_with(tree, Answering(stance_note(("skill", "tea-brewing", stance)), answers={"tea-brewing": answer}))
     assert result["status"] == daily.STATUS_FAILED
-    assert "stance" in result["stop_reason"]
+    assert [item["name"] for item in result["dropped_verdicts"]] == ["tea-brewing"]
     assert entries_of(tree, "skill", "tea-brewing") == []
     assert result["ledger"]["notes"]["mentions_awaiting_check"] == 1
 

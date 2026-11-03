@@ -312,6 +312,28 @@ def test_unknown_origin_gives_non_zero_exit_and_a_marker_then_clears_on_a_clean_
     assert marker_of(data) is None
 
 
+def test_dropped_stance_verdicts_alone_are_named_in_the_marker(setup, tmp_path):
+    config_path, data, _ = setup
+    lone_script = tmp_path / "lone" / "Invoke-Upkeep.ps1"
+    lone_script.parent.mkdir()
+    shutil.copy(SCRIPT, lone_script)
+    result = {
+        "status": "failed", "stop_reason": None, "failed_sessions": [], "item_problems": [], "backlog_sessions": [], "windows_reset": [],
+        "secrets_redacted": 0, "memory_snapshot": {"errors": []}, "dropped_verdicts": [{"call": 1, "id": "s1", "problem": "does not fit"}],
+    }
+    (lone_script.parent / "daily.py").write_text(
+        f"import json, sys\njson.dump({result!r}, open(sys.argv[sys.argv.index('--result-file') + 1], 'w'))\nsys.exit(1)\n", encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [pwsh(), "-NoProfile", "-NonInteractive", "-File", str(lone_script), "-Pass", "daily", "-ConfigPath", str(config_path)],
+        capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW, check=False,
+    )
+    assert completed.returncode == 1, completed.stderr
+    entry = marker_of(data)["entries"][0]
+    assert entry["kind"] == "failed"
+    assert "1 stance verdicts were dropped" in entry["summary"]
+
+
 def test_crash_is_reported_with_the_error_tail(setup):
     config_path, data, _ = setup
     (data / "state" / "state.json").unlink()

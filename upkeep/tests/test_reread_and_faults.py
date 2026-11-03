@@ -160,11 +160,12 @@ def test_a_fault_is_added_once_and_goes_with_its_window(tree):
     ("biscuits", "memory", {"malfunction": True}),
     ("tea-brewing", "skill", {"malfunction": True}),
 ])
-def test_a_fault_that_does_not_fit_fails_the_call(tree, name, kind, answer):
+def test_a_fault_that_does_not_fit_is_dropped_and_fails_the_run(tree, name, kind, answer):
     write_inventory(tree)
     result = run_daily_with(tree, Answering(stance_note((kind, name, "no_bearing")), answers={name: answer}))
-    assert result["stance_check"] is None
-    assert "stance verdict s1" in result["stop_reason"]
+    assert result["status"] == "failed"
+    assert result["stance_check"]["dropped"] == 1
+    assert [item["id"] for item in result["dropped_verdicts"]] == ["s1"]
 
 
 def test_the_field_is_required_and_must_be_true_or_false():
