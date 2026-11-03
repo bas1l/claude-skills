@@ -26,6 +26,7 @@ Written under the data folder:
 
     reports/YYYY-Www/report.json     the format below, which the review step reads
     reports/YYYY-Www/review.json     the review built from it; see review_data.py
+    reports/YYYY-Www/sort.json       each open item's rating; see review_sort.py
     reports/YYYY-Www/review.html     the page rendered from that, by review_page.py
     reports/YYYY-Www/groups/         model replies by group, with a hash of their input
     reports/YYYY-Www/research/       research records
@@ -78,6 +79,7 @@ import pass_support
 import render
 import research
 import review_data
+import review_sort
 import schemas
 import sessions
 import stance_check
@@ -1059,6 +1061,8 @@ def run_weekly(
     schemas.validate_weekly_report(report, "weekly report")
     _write_json(report_path, report)
     result["review_page"] = review_data.write_review(config, report, now)
+    # The review is on disk by now, so a sort that fails can cost only the sort.
+    result["sort"] = review_sort.sort_review_safely(config, week, caller, run_id, now)
     _mark_reported(config, week)
 
     result["secrets_redacted"] += redacted + journal_redacted + caller.secrets_redacted

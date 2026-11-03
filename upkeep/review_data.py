@@ -6,6 +6,7 @@ checks every action against it. Knows no git and no model.
 
     reports/YYYY-Www/review.json    schema version 1, checked by ``schemas.validate_review``
     reports/YYYY-Www/review.html    the page
+    reports/YYYY-Www/sort.json      each open item's rating, by key; see review_sort.py
 
 review.json:
 
@@ -15,8 +16,9 @@ review.json:
                      action has followed, to now
     last_action_at   when something was last decided in this review, or null
     failures[]       kind, summary: failed or stopped pass, failure marker entries, skipped windows,
-                     items that could not be read, and four that fail nothing: possible renames, what
-                     the stance check did, rules broken at a cost, and an item's own faults, per item
+                     items that could not be read, items the sort could not rate, and four that fail
+                     nothing: possible renames, what the stance check did, rules broken at a cost, and
+                     an item's own faults, per item
     items[]          number, key, section memory|proposal, origin weekly|monthly, week (the item's
                      original week), carried, title, allowed[], decision {outcome, at, detail} or
                      null, skipped_at, ledger, record (the report's record, unchanged)
@@ -59,12 +61,14 @@ from config import DEFAULT_CONFIG_PATH, Config, load_config
 _WEEK_FOLDER_RE = re.compile(r"^\d{4}-W\d{2}$")
 REVIEW_FILE = "review.json"
 PAGE_FILE = "review.html"
+SORT_FILE = "sort.json"
 REPORT_FILE = "report.json"
 MONTHLY_FOLDER = "monthly"
 FEED_SCHEMA_VERSION = 1
 FEED_FIELDS = frozenset({"schema_version", "source", "run_id", "generated_at", "proposals"})
 MARKER_FILE = "failure-marker.json"
 MARKER_SCHEMA_VERSION = 1
+MARKER_PASS_REVIEW = "review"
 LEDGER_LATEST_SHOWN = 3
 STATUS_OK = "ok"
 KIND_ITEM_PROBLEM = "item_problem"
@@ -72,6 +76,7 @@ KIND_POSSIBLE_RENAME = review_page.KIND_POSSIBLE_RENAME
 KIND_STANCE_CHECK = review_page.KIND_STANCE_CHECK
 KIND_RULE_BROKEN = review_page.KIND_RULE_BROKEN
 KIND_MALFUNCTION = review_page.KIND_MALFUNCTION
+KIND_SORT_FAILED = review_page.KIND_SORT_FAILED
 USAGE_STAMP = "%Y-%m-%dT%H:%M:%S%z"
 ALREADY_OPEN = "already_open"
 OUTCOME_APPLIED = schemas.OUTCOME_APPLIED
@@ -148,16 +153,46 @@ def latest_review(data_dir: str) -> dict[str, Any]:
     return load_review(data_dir, weeks[-1])
 
 
+def sort_path(data_dir: str, week: str) -> str:
+    return os.path.join(reports_dir(data_dir), week, SORT_FILE)
+
+
+def read_sort(data_dir: str, week: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """(the sort of this week, what is wrong with it). No file is neither. A file that cannot be read
+    is reported and not raised, because every session action renders the page and typing must keep
+    working: its items show as unsorted, and its fault shows in the failures."""
+    path = sort_path(data_dir, week)
+    if not os.path.isfile(path):
+        return None, None
+    try:
+        document = _read_json(path)
+        schemas.validate_sort_document(document, path)
+    except (OSError, ValueError, AttributeError, TypeError, KeyError) as error:
+        return None, f"{type(error).__name__}: {error}"
+    return document, None
+
+
+def render_review_page(data_dir: str, review: Mapping[str, Any], send: review_page.SendState = review_page.STATIC_SEND) -> str:
+    """The page of a review with its sort, as text."""
+    sorting, problem = read_sort(data_dir, review["week"])
+    return review_page.render_page(review, sorting, problem, send)
+
+
+def write_static_page(data_dir: str, review: Mapping[str, Any], send: review_page.SendState = review_page.STATIC_SEND) -> str:
+    """Write the file form of the page, which has no server behind it. Returns its path."""
+    target = page_path(data_dir, review["week"])
+    temporary = f"{target}.tmp-{os.getpid()}"
+    with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(render_review_page(data_dir, review, send))
+    os.replace(temporary, target)
+    return target
+
+
 def save_review(data_dir: str, review: Mapping[str, Any]) -> str:
     """Validate, write review.json, render the page. Returns the page's path."""
     schemas.validate_review(review, "review to write")
     extract.write_json_atomic(review_path(data_dir, review["week"]), review)
-    target = page_path(data_dir, review["week"])
-    temporary = f"{target}.tmp-{os.getpid()}"
-    with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(review_page.render_page(review))
-    os.replace(temporary, target)
-    return target
+    return write_static_page(data_dir, review)
 
 
 def deletion_parts(exact_change: str) -> tuple[str, str, str]:
@@ -353,7 +388,39 @@ def _signals(data_dir: str, window_days: int, now: datetime) -> list[dict[str, s
     return signals
 
 
-def _failures(data_dir: str, status: str, stop_reason: Optional[str], coverage: Mapping[str, Any], window_days: int, now: datetime) -> list[dict[str, str]]:
+def _sort_failures(data_dir: str, week: str, items: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """What the sort could not rate, per reason. Only open items count, since a decided one needs no
+    rating. A review that no sort has run on has failed nothing: the page says so under Unsorted."""
+    document, problem = read_sort(data_dir, week)
+    if problem is not None:
+        return [{"kind": KIND_SORT_FAILED, "summary": f"The sort of this review could not be read, so every item is unsorted. {problem}"}]
+    if document is None:
+        return []
+    reasons: dict[str, list[int]] = {}
+    for item in items:
+        if item["decision"] is not None:
+            continue
+        entry = document["items"].get(item["key"])
+        if entry is None:
+            reasons.setdefault("The item came after the last sort.", []).append(item["number"])
+        elif entry["status"] != schemas.SORT_ENTRY_RATED:
+            reasons.setdefault(entry["unrated_reason"], []).append(item["number"])
+    return [
+        {"kind": KIND_SORT_FAILED, "summary": f"{len(numbers)} item{'' if len(numbers) == 1 else 's'} could not be sorted, and show under Unsorted (numbers {', '.join(map(str, numbers))}). {reason}"}
+        for reason, numbers in reasons.items()
+    ]
+
+
+def save_with_sort_failures(data_dir: str, review: dict[str, Any]) -> str:
+    """Bring the sort's own entries in the failures up to date, and render the page again."""
+    others = [failure for failure in review["failures"] if failure["kind"] != KIND_SORT_FAILED]
+    review["failures"] = [*others, *_sort_failures(data_dir, review["week"], review["items"])]
+    return save_review(data_dir, review)
+
+
+def _failures(
+    data_dir: str, week: str, items: Sequence[Mapping[str, Any]], status: str, stop_reason: Optional[str], coverage: Mapping[str, Any], window_days: int, now: datetime,
+) -> list[dict[str, str]]:
     failures = []
     held = ledger.read_item_problems(ledger.ledgers_dir_of(data_dir))
     if status != STATUS_OK:
@@ -367,8 +434,13 @@ def _failures(data_dir: str, status: str, stop_reason: Optional[str], coverage: 
         marker = _read_json(marker_path)
         if marker.get("schema_version") != MARKER_SCHEMA_VERSION:
             raise ReviewDataError(f"{marker_path}: schema_version {marker.get('schema_version')!r}")
-        failures.extend({"kind": entry["kind"], "summary": entry["summary"]} for entry in marker["entries"])
+        # The sort's own entry only raises the warning at session start. Its failures are read from sort.json below.
+        failures.extend(
+            {"kind": entry["kind"], "summary": entry["summary"]} for entry in marker["entries"]
+            if not (entry.get("pass") == MARKER_PASS_REVIEW and entry["kind"] == KIND_SORT_FAILED)
+        )
     failures.extend({"kind": KIND_ITEM_PROBLEM, "summary": f"{problem['what']} could not be read. {problem['detail']}"} for problem in held["problems"])
+    failures.extend(_sort_failures(data_dir, week, items))
     failures.extend({"kind": KIND_POSSIBLE_RENAME, "summary": f"{rename['what']}. {rename['detail']}"} for rename in held["possible_renames"])
     failures.extend(_signals(data_dir, window_days, now))
     return failures
@@ -451,7 +523,7 @@ def build_review(config: Config, report: Mapping[str, Any], now: datetime) -> di
         "apply_enabled": report["apply_enabled"],
         "weeks_overdue": weeks_overdue(data_dir, now, last_action, (week, any(item["decision"] is None for item in items))),
         "last_action_at": last_action,
-        "failures": _failures(data_dir, report["status"], report["stop_reason"], coverage, config.ledger.inferred_window_days, now),
+        "failures": _failures(data_dir, week, items, report["status"], report["stop_reason"], coverage, config.ledger.inferred_window_days, now),
         "coverage": coverage,
         "usage": report["usage"],
         "items": items,
@@ -473,7 +545,7 @@ def refresh_review(config: Config, now: datetime) -> str:
     data_dir = config.paths.data_dir
     review = latest_review(data_dir)
     review["weeks_overdue"] = weeks_overdue(data_dir, now, review["last_action_at"])
-    review["failures"] = _failures(data_dir, review["report_status"], review["stop_reason"], review["coverage"], config.ledger.inferred_window_days, now)
+    review["failures"] = _failures(data_dir, review["week"], review["items"], review["report_status"], review["stop_reason"], review["coverage"], config.ledger.inferred_window_days, now)
     return save_review(data_dir, review)
 
 

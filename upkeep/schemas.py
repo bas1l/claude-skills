@@ -9,7 +9,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 # Version 1 notes have no ``items``, and stay readable as they are. Version 2 notes must have it.
 NOTES_SCHEMA_VERSION = 2
@@ -786,3 +786,100 @@ def validate_review(document: Any, where: str) -> None:
         if decision is not None:
             _exact_fields(decision, frozenset({"outcome", "at", "detail"}), f"{place} decision")
             _enum(decision, "outcome", REVIEW_OUTCOMES, f"{place} decision")
+
+
+# ---------------------------------------------------------------------------
+# The sort: reports/YYYY-Www/sort.json, one rating per item key. Numbers are not in it, so that
+# sorting cannot move them. See review_sort.py.
+# ---------------------------------------------------------------------------
+
+SORT_SCHEMA_VERSION = 1
+IMPORTANCE_IMPORTANT = "important"
+IMPORTANCE_LOWER = "lower"
+SORT_IMPORTANCES = frozenset({IMPORTANCE_IMPORTANT, IMPORTANCE_LOWER})
+CLARITY_CLEAR = "clear"
+CLARITY_UNCLEAR = "unclear"
+SORT_CLARITIES = frozenset({CLARITY_CLEAR, CLARITY_UNCLEAR})
+SORT_OPTIONS_MIN = 2
+SORT_OPTIONS_MAX = 4
+SORT_RATING_FIELDS = frozenset({"id", "importance", "clarity", "reason", "recommended", "options"})
+SORT_DOCUMENT_FIELDS = frozenset({"schema_version", "week", "sorted_at", "run_id", "model", "cost_usd", "items"})
+SORT_ENTRY_RATED = "rated"
+SORT_ENTRY_UNRATED = "unrated"
+SORT_ENTRY_STATUSES = frozenset({SORT_ENTRY_RATED, SORT_ENTRY_UNRATED})
+SORT_ENTRY_FIELDS = frozenset({"status", "digest", "importance", "clarity", "reason", "recommended", "options", "unrated_reason", "citations"})
+CITATION_MATCHES = "matches"
+CITATION_MOVED = "moved"
+CITATION_CHANGED = "changed"
+CITATION_REDACTED = "redacted"
+CITATION_FILE_GONE = "file_gone"
+CITATION_UNREADABLE = "unreadable"
+CITATION_NO_QUOTE = "no_quote"
+CITATION_STATUSES = frozenset({
+    CITATION_MATCHES, CITATION_MOVED, CITATION_CHANGED, CITATION_REDACTED, CITATION_FILE_GONE, CITATION_UNREADABLE, CITATION_NO_QUOTE,
+})
+CITATION_FIELDS = frozenset({"file", "line", "status", "found_line"})
+
+
+def parse_sort_reply(raw: str) -> list[Any]:
+    """Exactly ``{"ratings": [...]}``. Each rating is checked alone by ``validate_sort_rating``, so
+    that one bad rating leaves only its own item unsorted."""
+    return _list_of(_single_json_object(raw, frozenset({"ratings"})), "ratings")
+
+
+def _rated_fields(values: Mapping[str, Any], allowed: Sequence[str], reason_max: int, option_max: int, where: str) -> None:
+    """What makes a rating usable: the same for a model's reply and for what is stored of it."""
+    _enum(values, "importance", SORT_IMPORTANCES, where)
+    clarity = _enum(values, "clarity", SORT_CLARITIES, where)
+    reason = _nonempty_string(values, "reason", where)
+    if len(reason) > reason_max or "\n" in reason.strip():
+        raise SchemaError(f"{where}: reason must be one line of at most {reason_max} characters")
+    if values["recommended"] not in allowed:
+        raise SchemaError(f"{where}: recommended {values['recommended']!r} is not among {list(allowed)}")
+    options = values["options"]
+    if not isinstance(options, list) or not all(isinstance(option, str) and option.strip() for option in options):
+        raise SchemaError(f"{where}: options must be a list of non-empty strings")
+    if any(len(option) > option_max or "\n" in option.strip() for option in options):
+        raise SchemaError(f"{where}: an option must be one line of at most {option_max} characters")
+    if clarity == CLARITY_UNCLEAR and not SORT_OPTIONS_MIN <= len(options) <= SORT_OPTIONS_MAX:
+        raise SchemaError(f"{where}: an unclear item needs {SORT_OPTIONS_MIN} to {SORT_OPTIONS_MAX} options, not {len(options)}")
+    if clarity == CLARITY_CLEAR and options:
+        raise SchemaError(f"{where}: a clear item has no options")
+
+
+def validate_sort_rating(values: Any, allowed: Sequence[str], reason_max: int, option_max: int, where: str) -> None:
+    """One rating, against the actions its item can take."""
+    _exact_fields(values, SORT_RATING_FIELDS, where)
+    _rated_fields(values, allowed, reason_max, option_max, where)
+
+
+def validate_sort_document(document: Any, where: str) -> None:
+    """Raise unless this is a well-formed sort.json. A rated entry holds every rating field and an
+    unrated one none, so that nothing can read as rated without having been rated."""
+    _exact_fields(document, SORT_DOCUMENT_FIELDS, where)
+    if document["schema_version"] != SORT_SCHEMA_VERSION:
+        raise SchemaError(f"{where}: schema_version {document['schema_version']!r}")
+    if not isinstance(document["items"], dict):
+        raise SchemaError(f"{where}: items must be an object")
+    for key, entry in document["items"].items():
+        place = f"{where} item {key}"
+        _exact_fields(entry, SORT_ENTRY_FIELDS, place)
+        status = _enum(entry, "status", SORT_ENTRY_STATUSES, place)
+        if not isinstance(entry["citations"], list):
+            raise SchemaError(f"{place}: citations must be a list")
+        for citation in entry["citations"]:
+            _exact_fields(citation, CITATION_FIELDS, f"{place} citation")
+            _enum(citation, "status", CITATION_STATUSES, f"{place} citation")
+        if status == SORT_ENTRY_UNRATED:
+            _nonempty_string(entry, "unrated_reason", place)
+            if any(entry[name] for name in ("importance", "clarity", "reason", "recommended", "options")):
+                raise SchemaError(f"{place}: an unrated entry holds a rating")
+        else:
+            if entry["unrated_reason"]:
+                raise SchemaError(f"{place}: a rated entry holds a reason it is unrated")
+            _enum(entry, "importance", SORT_IMPORTANCES, place)
+            _enum(entry, "clarity", SORT_CLARITIES, place)
+            _nonempty_string(entry, "reason", place)
+            _nonempty_string(entry, "recommended", place)
+            if not isinstance(entry["options"], list) or not all(isinstance(option, str) for option in entry["options"]):
+                raise SchemaError(f"{place}: options must be a list of strings")

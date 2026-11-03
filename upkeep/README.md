@@ -11,12 +11,14 @@ All times are local and stay local across daylight saving.
 | Task | When | What it does |
 |---|---|---|
 | `Claude Code Upkeep Daily` | Every day, 01:00 | Reads new sessions, writes notes and counts, adds ledger entries, commits memory folder snapshots |
-| `Claude Code Upkeep Weekly` | Wednesday, 02:00 and 05:30 | Runs the daily pass if that day's did not complete, applies memory changes, researches proposals, writes the review. The 05:30 run does nothing if the week's pass succeeded |
+| `Claude Code Upkeep Weekly` | Wednesday, 02:00 and 05:30 | Runs the daily pass if that day's did not complete, applies memory changes, researches proposals, writes the review and sorts its items. The 05:30 run does nothing if the week's pass succeeded |
 | `Claude Code Upkeep Monthly` | First Saturday, 03:00 and 09:30 | Audits the whole setup. Only proposes; results join the next weekly review. The 09:30 run does nothing if the month's pass succeeded |
 
 Each task runs without a logged-on user (S4U), wakes the PC, runs as soon as possible after a missed start, needs a network and stops after 6 hours. A new run catches up all unprocessed sessions. Each pass has a budget, `model.run_budget_usd` in `config.json`.
 
 Nothing here touches `Claude Code Daily Brief` or `Claude Code Weekly Rollup`.
+
+One thing runs only when you click: the shortcut `Claude Upkeep Review` starts a local server for the review page. See [The review page's server](#the-review-pages-server).
 
 ## Going live on this PC
 
@@ -59,9 +61,9 @@ Code is in this repository, which is public. All data stays outside it, in `~/.c
 | `state/` | Which sessions are processed, up to which line of each file |
 | `notes/YYYY-MM-DD/`, `counts/` | Extraction notes and script-made counts |
 | `ledgers/` | Reasons for and against each memory, skill, hook and MCP server, rules broken at a cost, faults of a hook or tool, what could not be read, possible renames, and every verdict of the stance check |
-| `proposals/`, `reports/YYYY-Www/`, `reports/monthly/` | Proposals, drafts, and the weekly review and its page |
+| `proposals/`, `reports/YYYY-Www/`, `reports/monthly/` | Proposals, drafts, and the weekly review, its sort and its page |
 | `logs/` | One record per run, usage, and each run's output |
-| `run/`, `review/` | Working folders of the passes and of the review session |
+| `run/`, `review/` | Working folders of the passes and of the review session. `review/server/` holds the page server's address and token while it runs, and the batches sent from the page |
 | `local.json` | This machine's interpreter, private terms and `apply_memory_changes` |
 | `failure-marker.json` | Exists only when a run has something to report |
 
@@ -78,6 +80,7 @@ The `upkeep_status` hook prints that line when `failure-marker.json` exists, or 
 | `stale lock` | A run ended without releasing its lock, or left one that could not be read | Read it, then delete the entry or the file |
 | `secrets matched` | A secret pattern was redacted from notes | Read those notes, then delete the entry or the file |
 | `window reset` | A session's records changed, so it was read again | Read it, then delete the entry or the file |
+| `sort failed`, shown as `review sort failed` | The review's sort, in a pass or by hand, left open items unrated. The pass's own status is not changed by this | A later sort of that week or a later one with every open item rated, by a weekly pass or by `review_sort.py sort` |
 | `no run for N hours` | The scheduled tasks stopped firing, or are paused or not registered yet. It is not an entry in the marker | The next run of a pass |
 
 To rerun by hand, from any window: `pwsh -File "$HOME\.claude\skills\upkeep\Invoke-Upkeep.ps1" -Pass daily`, or `weekly` or `monthly`. A monthly pass that failed at 03:00 retries by itself at 09:30, after the 03:00 run's 6-hour limit. If that fails too, it waits for this or for next month. A spent weekly limit will not have reset by 09:30, so that case takes a hand run.
@@ -93,6 +96,48 @@ An entry whose note no longer holds its text is listed the same way. A window re
 A name matches its ledger whatever its case. A note naming `Plan-Create` reaches the ledger of `plan-create`, and a memory renamed only in case takes its ledger along. Each part of a session is read with a list of known names: every skill, hook, tool server and plugin, and the memories of that session's project folder, each with a short description. There are no global memories to add, since each folder holds its own. A hook also matches the status message its settings give it, which is what sessions call it, so `Kettle gate` reaches `kettle_gate`. A status message two scripts share matches neither. A name not on the list, written as `unknown: ...` by the reader, a true mismatch, and a name whose file holds some other item all go to `ledgers/unmapped-mentions.json`, whatever their stance.
 
 A rename to another name cannot be told from one item removed and another added, so entries stay under the old name. If an item with entries is gone, and a new empty one of the same scope and kind has the same founding reason or much the same name, the review lists the pair for `ledger.rename_flag_days` days. It fails nothing. If it is one item, move the entries into the new ledger file by hand, and delete the old file.
+
+## The review's sorted tabs
+
+The weekly pass rates every open item, once its review is on disk (`review_sort.py`, `prompts/review_sort.md`). Each gets an importance (`important` or `lower`), a clarity (`clear` or `unclear`), a one-line reason, a recommended action from that item's allowed actions, and for an unclear item 2 to 4 short option labels. The tabs are those four combinations, plus Unsorted, Decided, and Failures and notices.
+
+- **Before sorting,** a script reads each file and line a monthly finding cites, and records whether the quote still holds. The model and the page both see that.
+- **Numbers do not move.** Ratings live in `reports/<week>/sort.json`, by item key, and the numbers and the page version do not read it. `review_data.py refresh` and every session action leave it alone.
+- **A rating is reused** while what the model was shown stays the same, so a retry or a carried item costs nothing.
+- **No default.** An item that cannot be rated goes under Unsorted, with the reason, and the review's failures say so. A failed sort, or a single item it could not rate, also raises `Upkeep warning: review sort failed` at each session start. It stops only the sort, and the pass's own status does not change, so the 05:30 run will not retry it: `review_sort.py sort` does, and exits 1 if any open item is still unrated.
+- **To sort a review already built,** or to retry: `python review_sort.py plan` shows what would be sent and calls nothing. `python review_sort.py sort [--week 2026-W44]` sorts it, on its own `model.run_budget_usd`, and commits the data folder. The model is `review.sort_model`.
+- **To undo a sort:** delete `reports/<week>/sort.json`, and run `review_data.py refresh`. Every open item then shows under Unsorted.
+
+## The review page's server
+
+**What runs.** `Start-UpkeepReview.ps1` starts `review_server.py`, one Python process with no window, and opens its address instead of the file. It uses only the standard library, listens only on 127.0.0.1 on a port the system picks, and needs a random token of this run in the address, the right Host, and on a POST the right Origin and JSON within a size limit. It shows the page and answers the page's Send.
+
+**It applies nothing.** It checks a Send against the current review, writes one batch file under `review/server/`, and stops there. The session, woken by its background command `review_session.py wait-batch`, carries out each decision through the same commands as a typed one, so every check still runs, and reports each result back for the page to show. Approving a hook, a global rule, a plugin or an MCP server, and editing the global `CLAUDE.md`, still takes your yes on the exact change, typed in the session. A monthly finding's edit is shown first.
+
+**It closes by itself,** on the first of these, with the periods in `review_server` in `config.json`:
+
+| Reason | When | Setting |
+|---|---|---|
+| The session finished | The skill's Finish runs `finish-server` | |
+| All decided | Every item is decided, and the page has been given every result | |
+| Page gone | No heartbeat from the page for this long, with no batch waiting for the session | `page_gone_seconds`, 5 minutes |
+| Idle | No Send, no result and nothing done on the page for this long, whatever is waiting | `idle_limit_seconds`, 2 hours |
+
+The page then says the server has closed and how to reopen it, and lists your unsent choices to type. Reopening opens a new address, so choices not yet sent do not follow you there: copy them first.
+
+**Clicking again** reuses a server that answers, and opens no second session while one is waiting for a batch. A server left over from a crash is cleared first, and ended if it no longer answers, after checking by its creation time that it is the same process. If no server can start, the shortcut opens `review.html` as a file: tabs read, choices fill in, Send is off and says why.
+
+**To stop it now:** `python review_session.py finish-server`, or end the `python` process whose command line holds `review_server.py serve`. **To undo Send altogether:** revert the feature branch. Nothing in `review.json` depends on it, and typing in the session has worked throughout. Nothing else is left behind but `review/server/`, which can be deleted while no server runs.
+
+**What it trusts.** Your account: a program running as you can read the token in `review/server/server.json`, or write a batch file. That is no wider than what such a program can already do to `review.json`, but it is why the session must never send a batch itself.
+
+### Going live with the tabs and Send
+
+After the feature branch is merged and `git -C "$HOME\.claude\skills" pull` has run:
+
+1. Nothing to install and no task to change. The next weekly pass sorts its own review. Until then, the open review shows every item under Unsorted, says why, and Send works on it.
+2. To sort the open review now, which costs money: run `python "$HOME\.claude\skills\upkeep\review_sort.py" plan` to see the size, then `... review_sort.py sort`.
+3. Click the desktop shortcut. A page at a `127.0.0.1` address and a session should open. Press Send on one low-stakes item, and watch the session report it back.
 
 ## Rules a reader may want
 
@@ -122,6 +167,7 @@ Running `install.ps1 -RegisterUpkeep` or `Register-UpkeepTasks.ps1` again re-ena
 
 - **A memory change:** in the review, "undo N". This adds a new commit, and the change is not proposed again unless new evidence comes from you. A change stays in the review after a failed run or a crash, since `reports/YYYY-Www/applied.json` records it before it is written. Otherwise, revert that commit in the memory folder.
 - **A whole pass:** each memory folder has one commit per pass, so revert that commit in each folder. The commit message names the run.
+- **A sort:** delete `reports/<week>/sort.json`, and run `review_data.py refresh`.
 - **Stop applying memory changes, keep the rest:** set `apply_memory_changes` to false in `local.json`.
 
 ## Uninstall

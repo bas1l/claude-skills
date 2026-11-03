@@ -192,16 +192,17 @@ def hostile_review(config):
 def test_transcript_text_stays_inert(tree):
     review = hostile_review(tree)
     page = review_page.render_page(review)
-    assert "<script" not in page.lower()
+    assert page.lower().count("<script") == 2, "the page's own data block and script, and nothing from data"
     assert "<img" not in page.lower()
     assert page.count("&lt;script&gt;") >= 15
 
 
-def test_page_has_no_scripts_no_remote_assets_and_only_plain_external_anchors(tree):
+def test_page_has_only_its_own_script_no_remote_assets_and_only_plain_external_anchors(tree):
     page = review_page.render_page(hostile_review(tree))
     tags = tags_of(page)
-    forbidden = {"script", "img", "iframe", "link", "object", "embed", "audio", "video", "source", "form", "base", "svg", "input", "button"}
+    forbidden = {"img", "iframe", "link", "object", "embed", "audio", "video", "source", "form", "base", "svg"}
     assert not {tag for tag, _ in tags} & forbidden
+    assert [attributes for tag, attributes in tags if tag == "script"] == [{"type": "application/json", "id": "page-data"}, {}]
     for tag, attributes in tags:
         assert not {name for name in attributes if name.startswith("on") or name in ("src", "srcset", "srcdoc", "background", "action", "formaction")}, tag
         if "href" in attributes:
