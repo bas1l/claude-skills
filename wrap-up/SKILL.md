@@ -195,8 +195,8 @@ Output the full report. Format:
 Branch Cascade (dev-rooted):
 
   dev
-  ├── feature/scb-raw-data-output — SCB Raw Data Output (1 commit)
-  └── feature/persona-scb-field-alignment — Persona SCB Field Alignment (2 commits)
+  ├── feature/api-raw-data-output — API Raw Data Output (1 commit)
+  └── feature/sensor-feed-field-alignment — Sensor Feed Field Alignment (2 commits)
       └── feature/comparison-pipeline-outputs — Comparison Pipeline Outputs (1 commit)
           └── * feature/batch-extractor-identity-format — Batch Extractor (1 commit)
 
@@ -208,7 +208,7 @@ Fix Plans (no separate merge needed):
 
 Orphan Plans (active plan, branch missing):
   - pipeline-seed-documentation → feature/pipeline-seed-documentation (not found)
-  - scb-population-analysis-pipeline → feature/scb-population-analysis-pipeline (not found)
+  - api-usage-analysis-pipeline → feature/api-usage-analysis-pipeline (not found)
 
 Orphan Branches (no active plan):
   - v2.0.0_batch002-003
@@ -222,11 +222,11 @@ Uncommitted Files:
 
 Phase 3a — Local merges (leaf → root):
   1. feature/batch-extractor-identity-format → feature/comparison-pipeline-outputs
-  2. feature/comparison-pipeline-outputs → feature/persona-scb-field-alignment
+  2. feature/comparison-pipeline-outputs → feature/sensor-feed-field-alignment
 
 Phase 3b — Pull requests (dev-rooted):
-  3. feature/persona-scb-field-alignment → dev    PR (no existing PR)
-  4. feature/scb-raw-data-output         → dev    SKIP — PR #7 already open
+  3. feature/sensor-feed-field-alignment → dev    PR (no existing PR)
+  4. feature/api-raw-data-output         → dev    SKIP — PR #7 already open
   5. feature/legacy-cleanup              → dev    SYNC — PR #5 merged, cleanup only
 
 Excluded from cascade:
@@ -512,11 +512,11 @@ git stash pop
 
 Local merges (Phase 3a):
   ✓ feature/batch-extractor-identity-format → feature/comparison-pipeline-outputs
-  ✓ feature/comparison-pipeline-outputs     → feature/persona-scb-field-alignment
+  ✓ feature/comparison-pipeline-outputs     → feature/sensor-feed-field-alignment
 
 Pull requests (Phase 3b):
-  ✓ feature/persona-scb-field-alignment → dev   PR #12 opened  <url>
-  – feature/scb-raw-data-output         → dev   skipped, PR #7 already open
+  ✓ feature/sensor-feed-field-alignment → dev   PR #12 opened  <url>
+  – feature/api-raw-data-output         → dev   skipped, PR #7 already open
   ✓ feature/legacy-cleanup              → dev   synced (PR #5 merged), branch deleted
 
 Needing a decision:
@@ -525,11 +525,11 @@ Needing a decision:
 Plans completed: 3
   - Batch Extractor — Identity Format Mismatch
   - Comparison Pipeline — Outputs
-  - Persona Pipeline Field Expansion (SCB Alignment)
+  - Sensor Pipeline Field Expansion (Feed Alignment)
 
 Branches still open (awaiting PR review — do NOT delete):
-  - feature/persona-scb-field-alignment
-  - feature/scb-raw-data-output
+  - feature/sensor-feed-field-alignment
+  - feature/api-raw-data-output
 
 Current branch: dev   (unchanged — PRs merge on GitHub)
 Working tree: clean / N uncommitted files

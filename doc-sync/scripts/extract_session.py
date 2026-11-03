@@ -40,8 +40,8 @@ def encode_project_dir(path: str) -> str:
     """Claude Code's folder name for a working directory.
 
     Every character outside [A-Za-z0-9-] becomes a single dash, with no
-    collapsing of runs, so `F:\\Personal\\1_projets` becomes
-    `F--Personal-1-projets`. The mapping is lossy for non-ASCII and cannot be
+    collapsing of runs, so `C:\\work\\my_project` becomes
+    `C--work-my-project`. The mapping is lossy for non-ASCII and cannot be
     reversed; read the real path out of the transcript's `cwd` field instead.
     """
     return re.sub(r"[^A-Za-z0-9-]", "-", path)

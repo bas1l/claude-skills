@@ -3,8 +3,7 @@
 Covers checking that each cited source says what the citing sentence claims, that the reference
 list is correct, and that uncited claims get a source. Run it when asked to verify citations or
 check references, before submission, and after any revision that touched cited sentences.
-Distilled from the full audit of 2026-10-22 on the benchmark manuscript (42 references, 87
-citations). The global citation rule is `references/global.md` section 4.
+Distilled from one full audit of a manuscript (about 40 references). The global citation rule is `references/global.md` section 4.
 
 ## 1. Extract
 
@@ -31,16 +30,16 @@ citations). The global citation rule is `references/global.md` section 4.
   download by its first page (a scan without text layer: render a page image), copies it in under
   the right name, and keeps any arXiv copy as `NN_FirstAuthor_Year_arXiv-preprint.pdf`.
 - `_MISSING.md` also records which files are preprints or otherwise not the cited version.
-- **No final verdict without the full text.** In the 2026-10-22 run, about a quarter of verdicts
-  made from abstracts or truncated HTML were overturned once the PDF was read: a "sample of
-  individuals" method that used cross-tabulations; an "occupation skew" that was occupational
-  diversity plus gender stereotyping; "86% use only GPT" contradicted by the paper's own counts.
+- **No final verdict without the full text.** In one full audit, about a quarter of verdicts
+  made from abstracts or truncated HTML were overturned once the PDF was read (illustrative cases):
+  a "random sample" that was a convenience sample; an "age effect" that was an age-by-sex
+  interaction; "86% use only drug A" contradicted by the paper's own counts.
 
 ## 4. Verify by reference, in topic batches
 
 The unit of verification is the reference, not the sentence.
 
-1. **Batches**: group references by topic, 5 to 9 per subagent (about 7 batches for 42
+1. **Batches**: group references by topic, 5 to 9 per subagent (about 7 batches for 40
    references).
 2. **One context file per batch**: per reference, the full entry, every citing sentence and the
    full paragraphs around them. **One shared brief file** defines the method below for all
@@ -67,7 +66,7 @@ The unit of verification is the reference, not the sentence.
   canonical source and a DOI verified via Crossref. Candidate sources come from Consensus
   (`references/literature-search.md`).
 - Typical gaps: Methods statistics (named tests, indices, corrections, bootstrap); data-source
-  tables (official statistics table IDs and year); software with versions; price and web sources
+  tables (official table IDs and year); software with versions; price and web sources
   with access dates; literature-wide or novelty claims ("all approaches...", "no study has...")
   broader than the cited set; placeholders left in the text.
 
@@ -101,7 +100,7 @@ The unit of verification is the reference, not the sentence.
 - Renumber versus append when adding references (renumbering is journal-correct).
 - Scope of new citations.
 - Any new Methods disclosure text.
-- Unconfirmed price or provider sources.
+- Unconfirmed price or vendor sources.
 
 ## 8. Scripts
 

@@ -66,7 +66,7 @@ function Normalize-Title {
         # reply/forward prefixes; a thread can mix locales when participants
         # run different Outlook languages. `_` is accepted as the separator too,
         # because a title pasted from an exported filename has had its colon
-        # replaced ("FW_ TILA2 ..." rather than "FW: TILA2 ...").
+        # replaced ("FW_ Project X ..." rather than "FW: Project X ...").
         $t = $t -replace '^(RE|REPLY|FW|FWD|SV|VS|AW|WG|ANTW|TR|REF|VB)\s*[:_]\s*', ''
     } while ($t -ne $before)
     return ($t -replace '\s+', ' ').Trim()

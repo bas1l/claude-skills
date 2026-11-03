@@ -7,7 +7,7 @@ argument-hint: "[start|stop|restart|status] — default: start"
 # voice-latch — persistent AHK voice latch
 
 Controls `F:\Game-Optimization\voice-latch.ahk` via the helper at
-`C:\Users\basil\.claude\skills\voice-latch\scripts\voice-latch.ps1`.
+`$HOME\.claude\skills\voice-latch\scripts\voice-latch.ps1`.
 
 The helper creates the process through WMI (`Win32_Process.Create`), so its parent
 is `WmiPrvSE.exe` rather than the Claude Code shell. **It survives the end of this
@@ -32,7 +32,7 @@ intent out of it. Empty, or anything not listed below, means `start`.
 Run exactly one command with the PowerShell tool, substituting the resolved action:
 
 ```
-& "C:\Users\basil\.claude\skills\voice-latch\scripts\voice-latch.ps1" -Action <action>
+& "$HOME\.claude\skills\voice-latch\scripts\voice-latch.ps1" -Action <action>
 ```
 
 Do **not** launch `AutoHotkey64.exe` directly from Bash or with a bare

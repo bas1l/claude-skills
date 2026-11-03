@@ -30,7 +30,7 @@ where it is more specific.
   difference; a descriptive pattern is described as such; a non-significant result is not
   evidence of equality.
 - **No untested joint claims.** Two separate findings do not make a "trade-off", a mechanism or a
-  dominance claim unless a test addressed the joint statement. (The clash draft's "trade-off"
+  dominance claim unless a test addressed the joint statement. (One draft's "trade-off"
   framing was dropped for this reason and became a banned body word.)
 - **Every number traces to a file and key**, rounded once from the stored value. Numbers computed
   only in scratch are listed as new in the notes.

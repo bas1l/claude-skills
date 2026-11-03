@@ -29,7 +29,7 @@ Use the Agent tool with `run_in_background: true` and `subagent_type: "general-p
 Agent description: `"Run challenge skill on $ARGUMENTS"`
 
 Agent prompt (substitute `$ARGUMENTS` literally):
-> Read the skill file at `C:\Users\basil\.claude\skills\challenge\SKILL.md` in full,
+> Read the skill file at `~/.claude/skills/challenge/SKILL.md` in full,
 > then follow every step exactly as written, treating `$ARGUMENTS` as the `$ARGUMENTS`
 > value. Complete all steps including writing the `-challenge.md` output file.
 
@@ -53,7 +53,7 @@ Use the Agent tool with `run_in_background: true` and `subagent_type: "general-p
 Agent description: `"Run mediator skill on $ARGUMENTS"`
 
 Agent prompt (substitute `$ARGUMENTS` literally):
-> Read the skill file at `C:\Users\basil\.claude\skills\mediator\SKILL.md` in full,
+> Read the skill file at `~/.claude/skills/mediator/SKILL.md` in full,
 > then follow every step exactly as written, treating `$ARGUMENTS` as the `$ARGUMENTS`
 > value. The mediator will auto-pair the plan with its `-challenge.md` file.
 > Return the full adjudication report in your response.

@@ -1,6 +1,6 @@
 ---
 name: scientific-article-writing
-description: "How Basil and Claude co-write a scientific journal article, in linked section pairs drafted and loaded together: figures first (claim check, gallery of house-style prototypes, ranked proposals, variants, export, staging); then Results with Materials and Methods (Results as verified standalone docx drafts, the Word review and trim loop with tracked changes, Methods cut to the kept Results); then Discussion with the state of the art; then Introduction with Conclusion, fitted to what was kept; then the Abstract last, alone. Takes an optional section argument (figures, results, methods, discussion, introduction, state-of-the-art, conclusion, abstract) and loads only that section's guidance, its pair's guidance and the global rules; a task spanning several stages runs as a team of background teammates, one per section, that message each other and may spawn their own subagents. Use whenever work touches a manuscript, article or paper: writing, drafting, revising, trimming or restructuring a Results, Methods, Discussion, Introduction, related-work, Conclusion or Abstract section (restructure the methods to follow the Results); generating, choosing or redrawing a paper figure; writing or shortening captions; building a figure gallery or prototype set; reviewing a reviewed or trimmed .docx edited in Word; adding context or corrections to kept text; staging figures into figures_selection; checking terms across figure, caption and text; verifying citations, checking references against their sources or adding missing ones. Applies in the population-synthetic repo, the 40_llm-population-fidelity-benchmark manuscript folder and any future article, even when 'skill' or 'article' is not said."
+description: "How Basil and Claude co-write a scientific journal article, in linked section pairs drafted and loaded together: figures first (claim check, gallery of house-style prototypes, ranked proposals, variants, export, staging); then Results with Materials and Methods (Results as verified standalone docx drafts, the Word review and trim loop with tracked changes, Methods cut to the kept Results); then Discussion with the state of the art; then Introduction with Conclusion, fitted to what was kept; then the Abstract last, alone. Takes an optional section argument (figures, results, methods, discussion, introduction, state-of-the-art, conclusion, abstract) and loads only that section's guidance, its pair's guidance and the global rules; a task spanning several stages runs as a team of background teammates, one per section, that message each other and may spawn their own subagents. Use whenever work touches a manuscript, article or paper: writing, drafting, revising, trimming or restructuring a Results, Methods, Discussion, Introduction, related-work, Conclusion or Abstract section (restructure the methods to follow the Results); generating, choosing or redrawing a paper figure; writing or shortening captions; building a figure gallery or prototype set; reviewing a reviewed or trimmed .docx edited in Word; adding context or corrections to kept text; staging figures; checking terms across figure, caption and text; verifying citations, checking references against their sources or adding missing ones. Applies in any article's code repository or manuscript folder, even when 'skill' or 'article' is not said."
 ---
 
 # Scientific article writing
@@ -91,19 +91,17 @@ section file and its pair's file directly.
 ## Step 0: load the project profile
 
 Generic rules live in `references/`. Everything specific to one article (paths, rule files,
-toolkit, env, terminology owners) lives in `projects/<article>.md`. Identify the article from the
-working directory or the files named, then read its profile:
-
-| Article | Profile |
-|---|---|
-| LLM demographic-fidelity benchmark (repo `population-synthetic`, manuscript `40_llm-population-fidelity-benchmark`) | `projects/llm-population-fidelity-benchmark.md` |
+toolkit, env, terminology owners) lives in a private profile outside this public repository,
+`~/.claude/private-notes/<article-slug>.md`. Identify the article from the working directory or
+the files named, list that folder, then read the matching profile.
 
 The profile names the manuscript folder's own `CLAUDE.md` and rule files. **Those win over this
 skill** wherever they are more specific. If no profile matches, see "Adding a new article" below.
 
 ## Adding a new article
 
-Create `projects/<article-slug>.md` with these sections, then add a row to the Step 0 table:
+Create `~/.claude/private-notes/<article-slug>.md` with these sections. Never commit a profile to
+this repository:
 
 1. Identity: title, venue, where the manuscript folder and the code repository live.
 2. Authorities: the manuscript folder's `CLAUDE.md` and rule files (tone, terminology, format,

@@ -433,7 +433,7 @@ EOF
 )"
 ```
 
-- **scope**: derived from the branch name (`feature/strategy-v2-scb-chain-alignment` → `strategy-v2`)
+- **scope**: derived from the branch name (`feature/parser-v2-feed-chain-alignment` → `parser-v2`)
 - **subject**: the phase title, imperative and lowercase, under 50 chars where possible
 - **No `Co-Authored-By` trailer.** Basil Duvernoy authorship only
 

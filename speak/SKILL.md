@@ -20,7 +20,7 @@ Enable auto-speak mode: every subsequent assistant response will be spoken aloud
 2. Map the speed token to an edge-tts rate string using the speed table below.
 3. Write the rate string to the flag file using PowerShell:
    ```
-   Set-Content -Path "C:\Users\basil\.claude\hooks\speak-auto.flag" -Value "<rate>" -NoNewline
+   Set-Content -Path "$HOME\.claude\hooks\speak-auto.flag" -Value "<rate>" -NoNewline
    ```
 4. Respond with only: `Auto-speak ON (rate: <rate>).` — nothing else.
 
@@ -28,9 +28,9 @@ Enable auto-speak mode: every subsequent assistant response will be spoken aloud
 
 Disable auto-speak mode.
 
-1. Delete the file `C:\Users\basil\.claude\hooks\speak-auto.flag` using PowerShell:
+1. Delete the file `$HOME\.claude\hooks\speak-auto.flag` using PowerShell:
    ```
-   Remove-Item "C:\Users\basil\.claude\hooks\speak-auto.flag" -ErrorAction SilentlyContinue
+   Remove-Item "$HOME\.claude\hooks\speak-auto.flag" -ErrorAction SilentlyContinue
    ```
 2. Respond with only: `Auto-speak OFF.` — nothing else.
 
@@ -68,11 +68,11 @@ Map the speed argument to an edge-tts rate string:
 
 3. Truncate to 2000 characters if longer.
 
-4. Use the **Write** tool to save the sanitized text to a temp file at `C:\Users\basil\AppData\Local\Temp\claude-speak.txt`.
+4. Use the **Write** tool to save the sanitized text to a temp file at `~/AppData/Local/Temp/claude-speak.txt`.
 
 5. Run this PowerShell command with the appropriate rate:
    ```
-   & "D:\Programming\anaconda3\envs\social-touch\python.exe" "C:\Users\basil\.claude\hooks\speak.py" "C:\Users\basil\AppData\Local\Temp\claude-speak.txt" "en-US-JennyNeural" "<rate>"
+   & "D:\Programming\anaconda3\envs\social-touch\python.exe" "$HOME\.claude\hooks\speak.py" "$HOME\AppData\Local\Temp\claude-speak.txt" "en-US-JennyNeural" "<rate>"
    ```
    where `<rate>` is the edge-tts rate string (e.g., `+25%`).
 
