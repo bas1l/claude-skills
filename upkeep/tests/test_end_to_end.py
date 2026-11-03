@@ -49,7 +49,13 @@ if control.get("limit_on_call") == number:
     else:
         print("Weekly usage limit reached")
     sys.exit(1)
-if text.startswith("You are preparing changes"):
+if text.startswith("You are sorting"):
+    if control.get("fail_sort"):
+        print("the sort is failing, for a test", file=sys.stderr)
+        sys.exit(1)
+    lines = [json.loads(line) for line in text.rsplit("<items>", 1)[1].split("</items>")[0].strip().splitlines()]
+    reply = {"ratings": [{"id": line["id"], "importance": "lower", "clarity": "clear", "reason": "made up for a test", "recommended": line["allowed"][0], "options": []} for line in lines]}
+elif text.startswith("You are preparing changes"):
     reply = {"changes": [{
         "action": "create", "memory": "short-reports", "note": "n1", "claim": "Reports are kept short.", "old_text": "",
         "endorsement": "said", "quote": "print reports short, message 1", "assistant_statement": "", "title": "Short reports",
@@ -284,6 +290,35 @@ def test_a_run_killed_in_mid_session_resumes_with_no_duplicate_and_no_lost_sessi
     assert tree.invoke("daily").returncode == 0
     assert tree.calls() == []
     assert len(tree.notes()) == 4
+
+
+def test_a_failed_sort_warns_at_session_start_and_a_later_sort_clears_it(tree):
+    """Through the real entry script, the real hook and the real command. The fake model fails only the sort."""
+    hook = Path(SCRIPT).parent.parent / "hooks" / "upkeep_status" / "upkeep_status.py"
+
+    def warning():
+        return subprocess.run([sys.executable, str(hook), str(tree.config_path)], stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8", check=False).stdout
+
+    add_session(tree, SESSION_A, conversation(SESSION_A, 1, 1))
+    assert tree.invoke("daily").returncode == 0
+    tree.control(fail_sort=True)
+    completed = tree.invoke("weekly")
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(sorted((tree.data / "logs").glob("weekly-*.result.json"))[-1].read_text(encoding="utf-8"))
+    assert result["status"] == "ok" and result["sort"]["unrated"] == 1, "the pass's own status stays as it was"
+    entry, = tree.marker()["entries"]
+    assert entry["pass"] == "review" and entry["kind"] == "sort_failed"
+    assert "Upkeep warning" in warning() and "review sort failed" in warning()
+    review = json.loads(sorted((tree.data / "reports").rglob("review.json"))[-1].read_text(encoding="utf-8"))
+    assert [failure["kind"] for failure in review["failures"]].count("sort_failed") == 1, "shown once, not again from the marker"
+
+    command = [sys.executable, str(Path(SCRIPT).parent / "review_sort.py"), "sort", "--config", str(tree.config_path)]
+    still = subprocess.run(command, capture_output=True, encoding="utf-8", check=False)
+    assert still.returncode == 1 and tree.marker() is not None, still.stderr
+    tree.control()
+    fixed = subprocess.run(command, capture_output=True, encoding="utf-8", check=False)
+    assert fixed.returncode == 0, fixed.stderr
+    assert tree.marker() is None and "review sort failed" not in warning()
 
 
 @pytest.mark.parametrize("form", ["json", "text"])

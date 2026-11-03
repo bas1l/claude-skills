@@ -13,9 +13,15 @@ number that does not exist, or a review that has changed, is refused by code and
     approve-memory N             write an approved fact or removal into the memory, by a new commit
     record-approved N --detail T record a change applied in the session after Basil confirmed it
     read-again                   Basil reloaded the page and it shows this version: numbers are from it now
+    wait-batch                   block until the page sends a batch, or no server is left, then print it
+    batch-result N --batch B --state S [--detail T]    what happened to item N, for the page to show
+    batch-done --batch B         every item of this batch is settled
+    finish-server                close the page's server, at the end of the session
 
-All but show, item, why and check-draft need ``--review <review_id>``, which ``show`` prints and the
-page shows as its version, and ``--session <id>``. A refusal prints its reason and exits 2.
+All but show, item, why, check-draft and the last four need ``--review <review_id>``, which ``show``
+prints and the page shows as its version, and ``--session <id>``. A refusal prints its reason and
+exits 2. ``wait-batch`` applies nothing: the skill carries out each decision through the actions
+above, so that each one is checked as if it had been typed.
 
 A number means something only on the page it was read from, and that page may be open in a browser
 while a pass builds a new review. So a session stays on the version of its first action. If the
@@ -48,7 +54,9 @@ import ledger
 import memory_store
 import render
 import research
+import review_batch
 import review_data
+import review_page
 import schemas
 import weekly_gate
 from config import DEFAULT_CONFIG_PATH, Config, load_config, load_local_settings
@@ -197,8 +205,14 @@ def _save(config: Config, review: dict[str, Any], item: Mapping[str, Any], messa
     return {"number": item["number"], "title": item["title"], "outcome": outcome, "detail": detail, "page": page}
 
 
+def _tab_of(item: Mapping[str, Any], sorting: Optional[Mapping[str, Any]]) -> str:
+    return review_page.tab_of(item, sorting["items"].get(item["key"]) if sorting else None)
+
+
 def show(config: Config) -> dict[str, Any]:
     review = review_data.latest_review(config.paths.data_dir)
+    sorting = review_data.read_sort(config.paths.data_dir, review["week"])[0]
+    tabs = [_tab_of(item, sorting) for item in review["items"]]
     return {
         "review_id": review["review_id"],
         "week": review["week"],
@@ -206,6 +220,8 @@ def show(config: Config) -> dict[str, Any]:
         "weeks_overdue": review["weeks_overdue"],
         "report_status": review["report_status"],
         "failures": review["failures"],
+        "tabs": {label: tabs.count(tab) for tab, label in review_page.ITEM_TABS},
+        "server_running": review_batch.server_is_running(config.paths.data_dir),
         "page": review_data.page_path(config.paths.data_dir, review["week"]),
         "items": [
             {
@@ -213,8 +229,9 @@ def show(config: Config) -> dict[str, Any]:
                 "carried": item["carried"], "origin": item["origin"], "allowed": item["allowed"],
                 "decision": None if item["decision"] is None else item["decision"]["outcome"],
                 "skipped": item["skipped_at"] is not None,
+                "tab": tab,
             }
-            for item in review["items"]
+            for item, tab in zip(review["items"], tabs)
         ],
         "notice": DATA_NOTICE,
     }
@@ -515,10 +532,47 @@ def record_approved(config: Config, review_id: str, number: int, detail: str, no
     return {**result, "refresh_manifest": record["kind"] in MANIFEST_KINDS}
 
 
+def wait_batch(config: Config) -> dict[str, Any]:
+    """Block until the page sends something or no server is left. Applies nothing."""
+    settings = config.review_server
+    return {**review_batch.wait_for_batch(config.paths.data_dir, settings.wait_poll_seconds, lambda: datetime.now(timezone.utc)), "notice": DATA_NOTICE}
+
+
+def batch_result(config: Config, batch_id: str, number: int, state: str, detail: str, now: datetime) -> dict[str, Any]:
+    try:
+        results = review_batch.record_result(config.paths.data_dir, batch_id, number, state, detail, now)
+    except ValueError as error:
+        raise ReviewRefused(f"{error}. Nothing was recorded.") from error
+    return {"batch": batch_id, "number": number, "state": state, "reported": len(results["items"])}
+
+
+def batch_done(config: Config, batch_id: str, now: datetime) -> dict[str, Any]:
+    try:
+        review_batch.mark_done(config.paths.data_dir, batch_id, now)
+    except ValueError as error:
+        raise ReviewRefused(f"{error}. Nothing was recorded.") from error
+    return {"batch": batch_id, "done": True}
+
+
+def finish_server(config: Config) -> dict[str, Any]:
+    settings = config.review_server
+    return review_batch.finish_server(config.paths.data_dir, settings.close_grace_seconds + settings.stop_timeout_seconds)
+
+
 def _run(arguments: argparse.Namespace, config: Config, now: datetime) -> dict[str, Any]:
     action = arguments.action
     if action == "show":
         return show(config)
+    if action == "wait-batch":
+        return wait_batch(config)
+    if action == "finish-server":
+        return finish_server(config)
+    if action in ("batch-result", "batch-done"):
+        if not arguments.batch:
+            raise ReviewRefused(f"{action} needs --batch, which wait-batch prints.")
+        if action == "batch-done":
+            return batch_done(config, arguments.batch, now)
+        return batch_result(config, arguments.batch, arguments.number, arguments.state, arguments.detail, now)
     if action == "item":
         return item_detail(config, arguments.number)
     if action == "why":
@@ -551,15 +605,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("show", "item", "why", "check-draft", "undo", "reject", "keep", "skip", "approve-skill", "approve-memory", "record-approved", "read-again"))
+    parser.add_argument("action", choices=(
+        "show", "item", "why", "check-draft", "undo", "reject", "keep", "skip", "approve-skill", "approve-memory", "record-approved", "read-again",
+        "wait-batch", "batch-result", "batch-done", "finish-server",
+    ))
     parser.add_argument("number", nargs="?", type=int)
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--review")
     parser.add_argument("--session")
     parser.add_argument("--folder")
     parser.add_argument("--detail", default="")
+    parser.add_argument("--batch")
+    parser.add_argument("--state", default="")
     arguments = parser.parse_args(argv)
-    if arguments.action not in ("show", "read-again") and arguments.number is None:
+    if arguments.action not in ("show", "read-again", "wait-batch", "batch-done", "finish-server") and arguments.number is None:
         parser.error(f"{arguments.action} needs an item number")
     try:
         result = _run(arguments, load_config(arguments.config), datetime.now(timezone.utc))

@@ -142,7 +142,8 @@ def _read_text_safely(path: str, secrets: SecretsConfig) -> tuple[str, int]:
     return render.neutralise_tags(text), matches
 
 
-def _read_lines(path: str, secrets: SecretsConfig) -> tuple[str, ...]:
+def read_cited_lines(path: str, secrets: SecretsConfig) -> tuple[str, ...]:
+    """A file's lines as a citation quotes them: redacted, tags neutralised."""
     return tuple(_read_text_safely(path, secrets)[0].splitlines())
 
 
@@ -275,7 +276,7 @@ def read_corpus(config: Config) -> Corpus:
 
     secrets = config.secrets
     global_paths = global_chain(config)
-    global_files = tuple(SourceFile(next_ref(), path, ROLE_GLOBAL, "", os.path.basename(path), _read_lines(path, secrets)) for path in global_paths)
+    global_files = tuple(SourceFile(next_ref(), path, ROLE_GLOBAL, "", os.path.basename(path), read_cited_lines(path, secrets)) for path in global_paths)
     settings = _setting_facts(config, next_ref())
     chain_of_folder: dict[str, tuple[str, ...]] = {}
     cwd_of_folder: dict[str, Optional[str]] = {}
@@ -292,12 +293,12 @@ def read_corpus(config: Config) -> Corpus:
         chain_of_folder[project] = tuple(_key(path) for path in chain)
         for path in chain:
             if _key(path) not in project_files:
-                project_files[_key(path)] = SourceFile(next_ref(), path, ROLE_PROJECT, project, os.path.basename(path), _read_lines(path, secrets))
+                project_files[_key(path)] = SourceFile(next_ref(), path, ROLE_PROJECT, project, os.path.basename(path), read_cited_lines(path, secrets))
         for relative in memory_store.list_files(folder):
             if relative == memory_store.INDEX_FILE or not relative.endswith(".md"):
                 continue
             path = os.path.join(folder, relative)
-            lines = _read_lines(path, secrets)
+            lines = read_cited_lines(path, secrets)
             name = relative[: -len(".md")]
             memories.append(SourceFile(next_ref(), path, ROLE_MEMORY, project, name, lines, _is_feedback(lines, name, path)))
     skills = []
@@ -305,7 +306,7 @@ def read_corpus(config: Config) -> Corpus:
     for name in sorted(os.listdir(root)):
         path = os.path.join(root, name, SKILL_FILE)
         if os.path.isfile(path):
-            skills.append(SourceFile(next_ref(), path, ROLE_SKILL, "", name, _read_lines(path, secrets)))
+            skills.append(SourceFile(next_ref(), path, ROLE_SKILL, "", name, read_cited_lines(path, secrets)))
     every_file = (*global_files, *project_files.values(), *memories, *skills)
     matches = sum(_read_text_safely(item.path, secrets)[1] for item in every_file)
     return Corpus(
@@ -443,7 +444,7 @@ def measure_context(corpus: Corpus, config: Config) -> dict[str, Any]:
     projects = []
     for folder in sorted(corpus.chain_of_folder):
         index_path = os.path.join(config.paths.projects_dir, folder, "memory", memory_store.INDEX_FILE)
-        lines = _read_lines(index_path, config.secrets) if os.path.isfile(index_path) else ()
+        lines = read_cited_lines(index_path, config.secrets) if os.path.isfile(index_path) else ()
         loaded_lines, loaded_chars, first_cut = _loaded_index(lines, settings.index_lines_loaded, settings.index_bytes_loaded)
         instructions = sum(by_path[path].chars for path in corpus.chain_of_folder[folder])
         projects.append({

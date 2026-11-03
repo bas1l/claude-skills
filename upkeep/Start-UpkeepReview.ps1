@@ -1,11 +1,18 @@
 <#
 .SYNOPSIS
-  Opens the latest upkeep review: its page in the default browser, and a new terminal with
-  a Claude Code session in the review folder.
+  Opens the latest upkeep review: its page in the default browser, served by a local server so
+  that its Send button works, and a new terminal with a Claude Code session in the review folder.
 
 .DESCRIPTION
-  Brings the overdue count and failures on the page up to date, then opens it. Stops loudly,
-  opening nothing, if there is no report, the page is missing, or a part it needs is absent.
+  Brings the overdue count and failures on the page up to date, starts or reuses the local server,
+  then opens the server's address. Stops loudly, opening nothing, if there is no report, the page
+  is missing, or a part it needs is absent.
+
+  If the server cannot start, the file form of the page opens instead, with its tabs readable and
+  Send off, saying why. Typing in the session works either way.
+
+  A second click reuses a server that still answers, and opens no second session while one is
+  waiting for decisions. See review_server.py for how the server closes by itself.
 
   Only folders named like 2026-W44 count as weeks, so a report set aside under another name is
   not taken for the latest one.
@@ -21,7 +28,11 @@
   With -CreateShortcut, where to put it. The default is the desktop.
 
 .PARAMETER PlanOnly
-  Prints what would be opened, as JSON, and opens nothing.
+  Prints what would be opened, as JSON, starts nothing and opens nothing.
+
+.PARAMETER NoWindows
+  Starts or reuses the server for real, and prints the result as JSON, but opens no browser and no
+  terminal. For checking the launch without clicking.
 
 .PARAMETER ShowErrorsInWindow
   Also shows a failure in a message window. The shortcut passes this, since its own window is
@@ -37,6 +48,7 @@ param(
     [switch] $CreateShortcut,
     [string] $ShortcutFolder = '',
     [switch] $PlanOnly,
+    [switch] $NoWindows,
     [switch] $ShowErrorsInWindow
 )
 
@@ -91,6 +103,19 @@ function Get-LatestWeekFolder([string] $ReportsDir) {
     return $weeks[-1]
 }
 
+function Start-ReviewServer([string] $Python) {
+    # The server's own result, or the reason it has none. Never throws: the page opens either way.
+    $serverScript = Join-Path $PSScriptRoot 'review_server.py'
+    try {
+        $output = & $Python $serverScript start --config $ConfigPath 2>&1
+        $text = ($output | ForEach-Object { "$_" }) -join "`n"
+        if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ started = $text | ConvertFrom-Json; reason = '' } }
+        return [pscustomobject]@{ started = $null; reason = "The local server could not start. $text" }
+    } catch {
+        return [pscustomobject]@{ started = $null; reason = "The local server could not start. $($_.Exception.Message)" }
+    }
+}
+
 function Start-Review {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "config file not found: $ConfigPath" }
     $config = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
@@ -113,12 +138,26 @@ function Start-Review {
 
     $terminalArguments = "-d `"$reviewDir`" `"$claudeExe`" `"$SESSION_PROMPT`""
     if ($PlanOnly) {
-        [ordered]@{ page = $page; terminal = 'wt.exe'; terminal_arguments = $terminalArguments; working_directory = $reviewDir } | ConvertTo-Json
+        [ordered]@{ page = $page; server_script = (Join-Path $PSScriptRoot 'review_server.py'); terminal = 'wt.exe'; terminal_arguments = $terminalArguments; working_directory = $reviewDir } | ConvertTo-Json
         return
     }
-    $terminal = (Get-Command wt.exe -ErrorAction Stop).Source
-    Start-Process -FilePath $page
-    Start-Process -FilePath $terminal -ArgumentList $terminalArguments
+
+    $server = Start-ReviewServer $python
+    $target = $page
+    if ($server.started) {
+        $target = $server.started.url
+    } else {
+        # The file form says why Send is off. If even that fails, the page written by refresh still opens.
+        & $python (Join-Path $PSScriptRoot 'review_server.py') static --config $ConfigPath --reason $server.reason 2>&1 | Out-Null
+    }
+    $openSession = -not ($server.started -and $server.started.reused -and $server.started.session_waiting)
+    if ($NoWindows) {
+        [ordered]@{ target = $target; server_started = [bool] $server.started; reused = [bool] ($server.started -and $server.started.reused); would_open_session = $openSession; reason = $server.reason } | ConvertTo-Json
+        return
+    }
+    if ($openSession) { $terminal = (Get-Command wt.exe -ErrorAction Stop).Source }
+    Start-Process -FilePath $target
+    if ($openSession) { Start-Process -FilePath $terminal -ArgumentList $terminalArguments }
 }
 
 try {

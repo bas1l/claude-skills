@@ -400,6 +400,16 @@ An earlier round of the same cases had 2 replies rejected, of 44 on the check, b
 
 **Not run.** A pass on real sessions with these prompts, and a real model reply through `daily.run_daily`. How the wording changes `for` on real sessions, so the 2 of 5 stands until it is measured again. A fault of its own on a real session, and the page with real ones: fixtures cover them. How often Sonnet writes a correction after its reply on real input, where one call holds all waiting stances.
 
+## Found while building the sorted tabs and Send
+
+**Run for real, on fake data in a temp folder, on 2026-11-03.** The launcher `Start-UpkeepReview.ps1 -NoWindows` started `review_server.py`, and HTTP requests drove it from there. A wrong or missing token, a wrong Host, a wrong or missing Origin, a body type other than JSON, an oversize body, a preflight and a wrong review id were each refused, with no CORS header. A good batch left `review.json` the same byte for byte. `wait-batch` printed it and exited, the session's own commands applied it, `batch-done` was refused while one item was still being asked, and an item already decided was refused by the existing check. After the page had been given the last result, the server closed by itself in 1.2 seconds with reason `all_decided`. Its process, its port and its record were gone, and its log held no token. A click after that started a new one.
+
+**Run in a real browser.** Headless Chrome, driven through its debugging port, opened the same fake review from the file and from the server, with hostile text in the title, claim, reason, options and unrated reason. In both, the script ran under its hash, with no policy report and no script error, and the hostile text showed as text and did not run. Tabs, the default tab, bulk fill in one tab only, choices kept across a reload, Send, the results shown per item, and the closed notice with how to reopen all did what they should. Not run: a visible window, another browser, or the shortcut itself, which needs a click and opens a terminal. A background tab's slowed timers were not measured: `page_gone_seconds` is 5 minutes because browsers are known to slow them to about once a minute, and that is not measured here.
+
+**Not run.** A real model call on the sort: it uses fakes throughout, and what a real reply looks like on real items is unknown. Its cost is therefore an estimate. The real data folder was read to size that estimate, writing nothing and printing only numbers, and `review_sort.py sort` was not run on it.
+
+**Two things that surprised.** `os.kill(pid, 0)` is not a test on Windows, where signal 0 is Ctrl+C, so `process_probe.py` asks the system directly. And a script's hash must be taken after line endings are normalised, since HTML parsing turns CRLF into LF, so a checkout with CRLF would otherwise break the page's only script.
+
 ## Folders created by these tests
 
 Under the system temp folder, `upkeep-phase0-<name>`, and for each a matching project folder under `~/.claude/projects/`, for these names: `t02a-control`, `t02b-disabled`, `t02c-control`, `t02d-disabled`, `t03a-mcp`, `t03b-strict`, `t03c-control-tools`, `t04a-noallow`, `t04b-allow`, `t04d-task`, `s4u`. All are safe to delete.

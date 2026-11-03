@@ -616,7 +616,8 @@ def test_results_join_the_next_review_with_stable_numbers_and_render_escaped(tre
     assert all(schemas.ACTION_APPROVE in item["allowed"] for item in monthly_items)
 
     page = review_page.render_page(first)
-    assert "<script>" not in page and "From the monthly check" in page
+    assert page.count("<script>") == 1, "the page's own script, and nothing from data"
+    assert "From the monthly check" in page
     assert "feedback-ask.md" in page and ASK_RULE in page and "example.org/tool" in page
 
 

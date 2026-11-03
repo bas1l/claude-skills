@@ -805,10 +805,14 @@ def test_unchanged_input_reuses_the_reply_after_a_failed_run(tree):
     proposal_session(tree, SESSION_ID, failing=6)
     fake = FakeCall(proposals=json.dumps({"proposals": [new_skill()]}), searching=model_call.ModelCallError("down"))
     assert run(tree, DRY, fake)["status"] == "failed"
-    calls_before = sum(1 for call in fake.calls if not call["tools"])
+
+    def calls_of_the_pass():  # The sort has items only once the pass succeeds, so its first call is new and no repeat.
+        return sum(1 for call in fake.calls if not call["tools"] and not call["prompt"].startswith("You are sorting"))
+
+    calls_before = calls_of_the_pass()
     fake.searching = research_reply()
     assert run(tree, DRY, fake)["status"] == "ok"
-    assert sum(1 for call in fake.calls if not call["tools"]) == calls_before
+    assert calls_of_the_pass() == calls_before
 
 
 def test_malformed_reply_fails_the_pass_and_is_kept_for_reading(tree):

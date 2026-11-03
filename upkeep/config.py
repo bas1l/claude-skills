@@ -160,6 +160,34 @@ class ReviewConfig:
     skills_base_branch: str
     skills_branch_prefix: str
     failures_shown: int
+    sort_model: str
+    sort_batch_items: int
+    sort_batch_chars: int
+    sort_field_chars: int
+    sort_reason_max_chars: int
+    sort_option_max_chars: int
+
+
+@dataclass(frozen=True)
+class ReviewServerConfig:
+    """The local server behind the review page's Send button. Its address is not here on purpose:
+    it binds only to the loopback address, on a port the system chooses."""
+
+    token_bytes: int
+    max_body_bytes: int
+    max_note_chars: int
+    max_page_note_chars: int
+    heartbeat_seconds: float
+    send_poll_seconds: float
+    page_gone_seconds: float
+    idle_limit_seconds: float
+    close_grace_seconds: float
+    start_timeout_seconds: float
+    stop_timeout_seconds: float
+    start_lock_stale_seconds: float
+    watchdog_seconds: float
+    request_timeout_seconds: float
+    wait_poll_seconds: float
 
 
 @dataclass(frozen=True)
@@ -214,6 +242,7 @@ class Config:
     weekly: WeeklyConfig
     research: ResearchConfig
     review: ReviewConfig
+    review_server: ReviewServerConfig
     monthly: MonthlyConfig
 
 
@@ -256,6 +285,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         ("weekly", WeeklyConfig),
         ("research", ResearchConfig),
         ("review", ReviewConfig),
+        ("review_server", ReviewServerConfig),
         ("monthly", MonthlyConfig),
     ):
         _check_keys(section, raw[section], section_type)
@@ -312,6 +342,7 @@ def config_from_mapping(raw: Mapping[str, Any]) -> Config:
         status=StatusConfig(**raw["status"]),
         research=ResearchConfig(**{**raw["research"], "public_path_fragments": tuple(raw["research"]["public_path_fragments"])}),
         review=ReviewConfig(**raw["review"]),
+        review_server=ReviewServerConfig(**raw["review_server"]),
         monthly=MonthlyConfig(**{
             **monthly,
             "global_claude_file": _expand_path(monthly["global_claude_file"]),
