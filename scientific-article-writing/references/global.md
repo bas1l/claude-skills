@@ -56,6 +56,15 @@ where it is more specific.
 
 - **No em dashes, straight quotes only**, and the project's banned-word list, in every output.
 - **His own text keeps his voice.** Flag corrections, never rewrite silently.
+- **Tense.** Past tense for what this study did and found, present tense for what the literature
+  establishes. Hold one tense through a passage. A section file's rule for one part or one venue
+  (the Abstract's conclusion, an ML venue's present-tense results) wins in that place only.
+- **Voice.** Active first person plural for what was done ("We retrieved thirteen tables"). Plain
+  declaratives for findings.
+- **Statistics.** Report the estimate with its confidence interval; p is optional. Two decimals,
+  three for p, and "p < 0.001" below that. A test with no estimate (an omnibus test) reports its
+  statistic instead. Round once, from the stored value, as a separate statistics step: a language
+  pass never changes a number. Applies unless the project or venue sets another format.
 
 ## 6. Building a docx
 
