@@ -6,7 +6,9 @@ argument-hint: "[the term or idea to explain]"
 
 # Explain visually
 
-**First decide.** If one or two lines plainly settle it, answer in chat and stop. Otherwise build the page, and keep it small: a page for one idea is 2 to 4 sections. Delegate data extraction and the build to a subagent only when the data is large. The user wants the page soon.
+**First decide.** If one or two lines plainly settle it, answer in chat and stop. Otherwise a page gets built, and it stays small: a page for one idea is 2 to 4 sections.
+
+**A subagent must build the page.** The main session never extracts data, writes the fragments, builds or render-checks itself, however small the page. It launches a background subagent straight away, tells the user in one line that the page is on its way, and stays free to talk. Brief the subagent with the question in the user's own words, the files to use, the vocabulary rules, and these instructions: `${CLAUDE_SKILL_DIR}/SKILL.md`. The subagent runs steps 1 to 5 and returns the page's path and the paths of `cold_read.txt` and the PNGs; the main session then launches the cold read and sends any fixes back to the same subagent, and does steps 7 and 8 itself.
 
 ## Hard requirement: the page stands alone
 
@@ -55,8 +57,8 @@ Direct, no praise, no emotional framing. No internal labels or code names unless
    python "${CLAUDE_SKILL_DIR}/scripts/render_check.py" "<abs path>/page.html" --work "<scratch folder>" --test clicks.js
    ```
    It runs headless Chrome (`--headless=new`), saves one PNG per tab, and reports script errors, overlapping or clipped labels and sideways scrolling. `clicks.js` holds lines like `document.querySelector("#g2").dispatchEvent(new MouseEvent("click")); check("group 2 selected", ...)`; write it whenever the page has clicks. It can also call `labelProblems()` on a state reached by clicking. Read every PNG with Read and fix what it shows, including what the script can't see, such as a label sitting on a line.
-6. **Cold read.** Read the finished page as someone who hasn't seen the conversation, and list any term, number or reference that can't be understood from the page. You wrote it, so you can't see these gaps: give a fresh subagent only `cold_read.txt` and the PNGs, ask it to list what it can't understand, any claim that goes past what the page shows, any statements that conflict, and whether it could decide each question. Fix everything it lists, rebuild, re-run step 5.
+6. **Cold read,** launched by the main session. The builder can't see the page's gaps because it wrote it: give a second, fresh subagent only `cold_read.txt` and the PNGs, ask it to list any term, number or reference it can't understand from the page, what it can't understand, any claim that goes past what the page shows, any statements that conflict, and whether it could decide each question. Fix everything it lists, rebuild, re-run step 5.
 7. **Open exactly once,** only now: `Start-Process -FilePath "<abs path>/page.html"`. A subagent never opens the page; the main session does.
 8. **Reply** in a few lines: the absolute path, the direct answer, any question waiting. Do not repeat the page.
 
-**Later changes.** Rebuild with the script or use Edit, re-run steps 5 and 6 as far as the change needs, then tell the user to press F5. Never open a second tab.
+**Later changes.** Send them to the same subagent, which rebuilds with the script or uses Edit and re-runs steps 5 and 6 as far as the change needs. The main session then tells the user to press F5. Never open a second tab.
