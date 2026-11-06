@@ -22,7 +22,9 @@
           {
             "type": "command",
             "command": "{{PYTHON}}",
-            "args": ["{{CLAUDE_DIR}}/skills/hooks/session-colocate/session_colocate.py"],
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/session-colocate/session_colocate.py"
+            ],
             "timeout": 30,
             "statusMessage": "Co-locating session temp data"
           }
@@ -44,9 +46,24 @@
           {
             "type": "command",
             "command": "{{PYTHON}}",
-            "args": ["{{CLAUDE_DIR}}/skills/hooks/upkeep_status/upkeep_status.py"],
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/upkeep_status/upkeep_status.py"
+            ],
             "timeout": 5,
             "statusMessage": "Checking upkeep runs"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/keepwarm-12h/keepwarm_12h.py"
+            ],
+            "timeout": 10,
+            "statusMessage": "Keeping keepwarm at 12h"
           }
         ]
       }
@@ -79,7 +96,9 @@
           {
             "type": "command",
             "command": "{{PYTHON}}",
-            "args": ["{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_display.py"],
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_display.py"
+            ],
             "timeout": 30
           }
         ]
