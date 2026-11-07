@@ -71,7 +71,7 @@ delegated does not appear in the main transcript at all, so without it a session
 that used agents looks like a session where little happened.
 
 **2. Do not read the digest yourself.** A transcript is megabytes and a digest
-is tens of kilobytes of someone else's dead ends. Dispatch **one subagent** and
+is tens of kilobytes of someone else's dead ends. Dispatch **one subagent** (pass `model: "sonnet"`) and
 give it, verbatim:
 
 - the digest path;

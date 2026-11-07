@@ -323,7 +323,7 @@ Identify potential blockers and how to handle them:
 ### Before Writing the Plan
 
 - **Check knowledge base for relevant patterns** — As one of the first parallel
-  research tasks, spawn an Explore subagent with the following prompt:
+  research tasks, spawn an Explore subagent (pass `model: "sonnet"` -- index reading and summarising) with the following prompt:
 
   > Read `docs/development/knowledge-base/README.md`. For each note listed in
   > the index, assess whether its problem class overlaps with the feature being
