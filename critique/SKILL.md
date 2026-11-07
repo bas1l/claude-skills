@@ -24,7 +24,7 @@ If `$ARGUMENTS` is empty → ask the user what to critique, **stop**.
 
 ## Step 2: Launch challenge agent (background)
 
-Use the Agent tool with `run_in_background: true` and `subagent_type: "general-purpose"`.
+Use the Agent tool with `run_in_background: true`, `subagent_type: "general-purpose"` and `model: "opus"` (adversarial reasoning needs the strongest model).
 
 Agent description: `"Run challenge skill on $ARGUMENTS"`
 
@@ -48,7 +48,7 @@ When the challenge agent completes, briefly confirm: "Challenge complete. Starti
 
 ## Step 4: Launch mediator agent (background)
 
-Use the Agent tool with `run_in_background: true` and `subagent_type: "general-purpose"`.
+Use the Agent tool with `run_in_background: true`, `subagent_type: "general-purpose"` and `model: "opus"` (adversarial reasoning needs the strongest model).
 
 Agent description: `"Run mediator skill on $ARGUMENTS"`
 

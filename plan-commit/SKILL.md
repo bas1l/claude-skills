@@ -50,7 +50,7 @@ Each entry is a **plan identifier** -- can be a filename slug
 
 ### Step 1: Launch resolver-gatherer agent
 
-Launch a **background Agent** with:
+Launch a **background Agent** (`model: "haiku"` -- file gathering is mechanical) with:
 - The list of plan identifiers from argument parsing
 - Instructions to read `.claude/skills/_plan-resolve/SKILL.md` and follow its
   procedure for plan resolution
@@ -137,7 +137,7 @@ Unrelated files are shown but excluded unless user explicitly includes them.
 
 ### Step 4: Launch commit agent
 
-Launch a **background Agent** that:
+Launch a **background Agent** (`model: "haiku"` -- staging and committing are mechanical) that:
 
 1. Receives the validated file list and all plan metadata (title, branch, status,
    plan file path for each plan)

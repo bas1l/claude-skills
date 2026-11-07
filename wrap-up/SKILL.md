@@ -453,7 +453,7 @@ In **auto** mode invoke it directly. In **step-by-step** mode ask first.
    branch. The completion commit then rides *inside* the PR, so nothing is left
    dangling on a branch that GitHub will merge later.
 
-3. **Compose** — dispatch a background Agent instructed to read
+3. **Compose** — dispatch a background Agent (`model: "sonnet"` -- composing the PR description) instructed to read
    `~/.claude/skills/plan-pr/SKILL.md` (or the project-local copy if present) and
    execute **Phases 0–3 in delegated `compose` mode**. Pass the branch, its plan
    file path, and `dev` as the base. It must not push, must not run
@@ -468,7 +468,7 @@ In **auto** mode invoke it directly. In **step-by-step** mode ask first.
    - **Auto:** print `auto mode — opening this PR without confirmation` and
      proceed immediately. The display is a record, not a question.
 
-5. **Execute** — dispatch a second background Agent to read the same file and run
+5. **Execute** — dispatch a second background Agent (`model: "sonnet"` -- commit and merge execution) to read the same file and run
    **Phases 4–6 in delegated `execute` mode**, carrying the matching
    authorization statement:
    - Step-by-step: `Approval granted: the user answered yes at the orchestrator's gate.`

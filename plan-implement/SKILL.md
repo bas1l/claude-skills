@@ -209,7 +209,12 @@ Tasks: <count> | Files: <count>
 
 #### 2. Launch background Agent
 
-Launch a **background Agent** (`run_in_background: true`) with a self-contained prompt containing:
+**Model per phase (always pass `model` explicitly):**
+- Default `model: "sonnet"`.
+- Use `model: "opus"` when the phase is hard: statistical estimators / statistics code, numerical or geometry algorithms, cross-cutting refactors, or the plan marks the phase `model: opus`.
+- Escalation: if a phase's verification (tests/review) fails twice on Sonnet, re-dispatch that phase on `opus` and say so in the report.
+
+Launch a **background Agent** (`run_in_background: true`, `model: "sonnet"` or `"opus"` per the rule above) with a self-contained prompt containing:
 
 - Plan title and absolute file path
 - Project conventions (CuPy import order, authorship, git safety, no `Co-Authored-By` trailers)
@@ -296,7 +301,7 @@ Tasks: <count> | Files: <count>
 
 #### 2. Launch background Agent
 
-Launch a **background Agent** (`run_in_background: true`) with a self-contained prompt containing:
+Launch a **background Agent** (`run_in_background: true`, `model` chosen by the "Model per phase" rule in manual mode Step 2 above) with a self-contained prompt containing:
 - Plan title and absolute file path
 - Project conventions (CuPy import order, authorship, git safety, no `Co-Authored-By` trailers)
 - Instruction to read the pipeline-engineering guides in `~/.claude/knowledge/data-pipeline-engineering/` (`README.md` index; apply `02`'s architecture patterns/checklist, `03` for statistical/analytics code, and `05` for code craftsmanship) and follow their principles while implementing
@@ -587,8 +592,9 @@ procedure, exactly as phase agents are told to read the conventions guides.
 
 ### 7a. Compose Agent (background, read-only)
 
-Launch a background Agent (`run_in_background: true`) with a self-contained
-prompt containing:
+Launch a background Agent (`run_in_background: true`, `model: "sonnet"` --
+mining the plan and commits into a description needs no top-tier model) with a
+self-contained prompt containing:
 
 - Instruction to read `~/.claude/skills/plan-pr/SKILL.md` and execute
   **Phases 0, 1, 2 and 3 only — in delegated `compose` mode**.
@@ -654,7 +660,7 @@ the Hard Rule (which governs repo files) does not apply.
 ### 7c. Execute Agent (background)
 
 Reached on an explicit **yes** (attended) or immediately (unattended). Launch a
-second background Agent with:
+second background Agent (`model: "haiku"` -- push and `gh pr create` are mechanical) with:
 
 - Instruction to read `~/.claude/skills/plan-pr/SKILL.md` and execute
   **Phases 4, 5 and 6 only — in delegated `execute` mode**.

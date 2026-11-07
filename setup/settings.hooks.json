@@ -1,9 +1,30 @@
 {
   "_comment": "Merged into ~/.claude/settings.json by install.ps1. Each top-level key under 'settings' is set in settings.json; each event under 'hooks' REPLACES that event in settings.json; keys and events not listed are left alone. Placeholders: {{PYTHON}} = python.exe, {{CLAUDE_DIR}} = ~/.claude (forward slashes).",
   "settings": {
-    "cleanupPeriodDays": 36500
+    "cleanupPeriodDays": 36500,
+    "env": {
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+      "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+    }
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/subagent-model/subagent_model.py"
+            ],
+            "timeout": 10,
+            "statusMessage": "Assigning subagent model"
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "hooks": [

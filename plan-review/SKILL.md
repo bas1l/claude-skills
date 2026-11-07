@@ -110,7 +110,7 @@ later.
 
 ## Step 5: Per-phase review (parallel background Agents)
 
-Launch one **background Agent per phase** in scope. Each agent receives:
+Launch one **background Agent per phase** in scope. Pass `model: "opus"` -- review judgment needs the strongest model. Each agent receives:
 
 - Plan title, branch, file path
 - Phase number, title, goal, tasks, files-modified (verbatim from the plan)
