@@ -1,13 +1,13 @@
 ---
-name: open-selection-click
-description: Install, activate, deactivate or check the open-selection-click AutoHotkey script (F:\Game-Optimization\open-selection-click.ahk), which makes Ctrl+Alt+Left-click in the VS Code terminal open the selected file path in its default Windows app. USE THIS SKILL whenever the user asks in plain language to install, enable, disable, turn on, turn off, activate, deactivate or check this hotkey, using any phrasing such as "install open selection click", "activate open selection", "enable open-selection-click", "turn on ctrl alt click", "disable open selection click", "deactivate the open selection script", "turn off ctrl alt click", "stop the click-to-open hotkey", "is open selection click active", "open selection status". Activation persists across reboots, and so does deactivation.
+name: vscode-click-to-open
+description: Install, activate, deactivate or check the VS Code click-to-open hotkey, the AutoHotkey script (F:\Game-Optimization\open-selection-click.ahk) that makes Ctrl+Alt+Left-click in the VS Code terminal open the selected file path in its default external Windows app. USE THIS SKILL whenever the user asks in plain language to start, install, enable, stop, disable, turn on, turn off or check this hotkey, in any wording that mentions VS Code or the terminal together with click, open or external software, such as "start click vscode external software", "start vscode click to open", "enable click to open in vscode", "turn on ctrl alt click", "open files externally from vscode on click", "stop vscode click to open", "disable the click-to-open hotkey", "is vscode click to open active", "install open selection click". Activation persists across reboots, and so does deactivation.
 argument-hint: "[install|activate|deactivate|status] (default: status)"
 ---
 
-# open-selection-click: install and switch the hotkey on or off
+# vscode-click-to-open: install and switch the hotkey on or off
 
 Controls `F:\Game-Optimization\open-selection-click.ahk` through the helper at
-`$HOME\.claude\skills\open-selection-click\scripts\open-selection-click.ps1`.
+`$HOME\.claude\skills\vscode-click-to-open\scripts\vscode-click-to-open.ps1`.
 
 Active means both of these hold: the script is running now, and a shortcut in the
 Windows Startup folder starts it at every logon. Deactivating removes both, so the
@@ -32,7 +32,7 @@ An empty argument never changes anything: it reports the state.
 Run exactly one command with the PowerShell tool, substituting the action:
 
 ```
-& "$HOME\.claude\skills\open-selection-click\scripts\open-selection-click.ps1" -Action <action>
+& "$HOME\.claude\skills\vscode-click-to-open\scripts\vscode-click-to-open.ps1" -Action <action>
 ```
 
 Do not launch `AutoHotkey64.exe` directly from Bash or with a bare `Start-Process`: a
@@ -43,8 +43,8 @@ process started that way is a child of the session shell and can end with the co
 The helper prints one line, for example
 `ACTIVE running=true pid=1234 autostart=true extension=true`. Reply with a single line:
 
-- `ACTIVE`: `Open-selection-click is active (pid <n>) and starts at logon.`
-- `INACTIVE`: `Open-selection-click is off and will not start at logon. Say "activate open selection click" to install it.`
+- `ACTIVE`: `VSCode-click-to-open is active (pid <n>) and starts at logon.`
+- `INACTIVE`: `VSCode-click-to-open is off and will not start at logon. Say "start vscode click to open" to install it.`
 - `PARTIAL`: state which of the two is missing (the running process or the Startup shortcut), and that `activate` or `deactivate` brings them back in line.
 
 Add `The VS Code extension is missing, so the hotkey would do nothing.` when the line

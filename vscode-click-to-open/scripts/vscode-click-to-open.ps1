@@ -1,6 +1,6 @@
 <#
-  open-selection-click.ps1 - install, activate, deactivate or query the
-  open-selection-click AutoHotkey script.
+  vscode-click-to-open.ps1 - install, activate, deactivate or query the
+  open-selection-click.ahk AutoHotkey script (VS Code click-to-open hotkey).
 
   Active means two things together: the script is running now, and a shortcut in
   the Windows Startup folder starts it at every logon. Deactivating removes both,
