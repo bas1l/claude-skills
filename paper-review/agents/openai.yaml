@@ -1,0 +1,14 @@
+interface:
+  display_name: Paper Review
+  short_description: Review papers with progressive domain modules
+  default_prompt: Use the paper-review skill to run an evidence-safe scientific
+    review and load only the method, domain, round, or reviewer modules that apply.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

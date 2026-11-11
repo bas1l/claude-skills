@@ -1,0 +1,193 @@
+{
+  "paths": {
+    "projects_dir": "~/.claude/projects",
+    "data_dir": "~/.claude/upkeep",
+    "run_dir": "~/.claude/upkeep/run",
+    "claude_exe": "~/.local/bin/claude.exe",
+    "local_settings": "~/.claude/upkeep/local.json"
+  },
+  "sessions": {
+    "start_date": "2026-11-01T00:00:00+01:00",
+    "excluded_cwd_prefixes": ["~/.claude/upkeep"],
+    "excluded_cwd_globs": ["~/AppData/Local/Temp/upkeep-*"],
+    "count_only_cwd_prefixes": ["~/.claude/daily-brief"]
+  },
+  "cuts": {
+    "tool_chars": 2000,
+    "report_chars": 8000,
+    "pasted_chars": 4000,
+    "compact_summary_chars": 2000,
+    "system_chars": 600,
+    "hook_chars": 2000,
+    "report_tools": ["Agent", "Task"],
+    "hook_repeat_prefix_chars": 60
+  },
+  "chunking": {
+    "chunk_chars": 300000,
+    "stdin_limit_bytes": 10000000
+  },
+  "model": {
+    "extract_model": "opus",
+    "run_budget_usd": 25,
+    "call_timeout_seconds": 1800,
+    "scrub_env_prefixes": ["CLAUDECODE", "CLAUDE_CODE_", "CLAUDE_PID", "CLAUDE_EFFORT"]
+  },
+  "counts": {
+    "error_classes": [
+      ["permission or harness refusal", "(?i)permission|not allowed|denied|doesn't want to proceed|blocked|refus"],
+      ["command too long", "(?i)too long|ENAMETOOLONG|Argument list"],
+      ["timeout", "(?i)timed? ?out"],
+      ["file not read first or edit mismatch", "(?i)not been read|has been modified|String to replace not found|old_string"],
+      ["file missing", "(?i)no such file|cannot find|not found|does not exist"],
+      ["python traceback", "Traceback \\(most recent"],
+      ["unicode", "(?i)unicode(en|de)codeerror|charmap"],
+      ["import or module", "(?i)ModuleNotFound|ImportError"],
+      ["memory", "(?i)MemoryError|out of memory|Killed"],
+      ["exit code", "(?i)exit code"]
+    ],
+    "class_scan_chars": 3000,
+    "signature_chars": 70,
+    "traceback_marker": "Traceback (most recent call last)",
+    "startup_noise_line_patterns": [
+      "[/\\\\]\\.(bashrc|bash_profile|bash_login|profile|zshrc|zshenv|zprofile)(: line [0-9]+: |:[0-9]+: )",
+      "[/\\\\]Microsoft\\.PowerShell_profile\\.ps1:"
+    ],
+    "shell_tools": ["Bash", "PowerShell"]
+  },
+  "memory": {
+    "author_name": "",
+    "author_email": ""
+  },
+  "secrets": {
+    "patterns": [
+      ["anthropic", "sk-ant-[A-Za-z0-9_\\-]{10,}"],
+      ["sk", "\\bsk-[A-Za-z0-9_\\-]{20,}"],
+      ["github", "gh[pousr]_[A-Za-z0-9]{20,}"],
+      ["github", "github_pat_[A-Za-z0-9_]{20,}"],
+      ["aws", "AKIA[0-9A-Z]{16}"],
+      ["slack", "xox[abpr]-[A-Za-z0-9\\-]{10,}"],
+      ["google", "AIza[0-9A-Za-z_\\-]{30,}"],
+      ["bearer", "(?i)\\bbearer\\s+[A-Za-z0-9._~+/=\\-]{20,}"],
+      ["key-value", "(?i)(password|passwd|pwd|passphrase|secret(?!s)|credential|api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token)[A-Za-z0-9_\\-]{0,40}\\\\?[\"']?\\s*[=:]\\s*\\\\?(?:\"[^\"\\n]{8,}\"|'[^'\\n]{8,}'|[\"']?[^\\s\"']{8,})"],
+      ["key-value", "(?i)token\\\\?[\"']?\\s*[=:]\\s*\\\\?[\"']?(?=[^\\s\"']*[A-Za-z])[^\\s\"']{8,}"],
+      ["jwt", "eyJ[A-Za-z0-9_\\-]{15,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{5,}"],
+      ["pem", "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\\Z)"]
+    ]
+  },
+  "inventory": {
+    "skills_dir": "~/.claude/skills",
+    "settings_file": "~/.claude/settings.json",
+    "optional_settings_files": ["~/.claude/settings.local.json"],
+    "plugins_manifest": "~/.claude/skills/setup/plugins-mcp.json",
+    "user_config": "~/.claude.json",
+    "installed_plugins_file": "~/.claude/plugins/installed_plugins.json"
+  },
+  "item_check": {
+    "listing_description_chars": 100,
+    "model": "sonnet",
+    "item_chars": 30000,
+    "group_chars": 400000,
+    "earlier_rulings_shown": 5
+  },
+  "ledger": {
+    "direct_against_entries": 1,
+    "inferred_against_entries": 3,
+    "inferred_window_days": 28,
+    "rename_name_overlap": 0.5,
+    "rename_flag_days": 28,
+    "stated_limit_patterns": ["(?i)\\bfor now\\b", "(?i)\\bfor the moment\\b", "(?i)\\bfor the time being\\b", "(?i)\\binterim\\b", "(?i)\\buntil further notice\\b"],
+    "origin_tools": ["Write", "Edit"]
+  },
+  "weekly": {
+    "memory_model": "opus",
+    "proposal_model": "opus",
+    "recurrence_sessions": 3,
+    "costly_once_tool_calls": 50,
+    "failure_min_commands_lost": 5,
+    "failures_shown": 30,
+    "max_deletions_per_pass": 5,
+    "quote_failure_batch_min": 3,
+    "verification_model": "opus",
+    "said_quote_min_words": 3,
+    "reaction_quote_min_words": 2,
+    "assistant_statement_min_words": 4,
+    "tied_shared_words_min": 2,
+    "tied_word_min_letters": 3,
+    "tied_ignored_words": ["the", "and", "for", "with", "that", "this", "these", "those", "are", "was", "were", "been", "being", "have", "has", "had", "not", "but", "you", "your", "they", "them", "their", "its", "from", "into", "than", "then", "there", "here", "what", "which", "when", "will", "would", "can", "could", "should", "may", "might", "must", "shall", "does", "did", "all", "any", "user"],
+    "group_chars": 400000,
+    "source_assistant_chars": 1500,
+    "claim_max_chars": 500,
+    "title_max_chars": 60,
+    "index_hook_chars": 150,
+    "reproposal_word_overlap": 0.6,
+    "memory_excluded_origins": ["web"]
+  },
+  "status": {
+    "warn_after_hours_without_run": 50,
+    "unreadable_lock_grace_seconds": 60
+  },
+  "research": {
+    "model": "sonnet",
+    "budget_per_candidate_usd": 3,
+    "max_per_pass": 3,
+    "description_max_chars": 600,
+    "memory_shingle_words": 6,
+    "public_path_fragments": ["~/.claude/", ".claude/"]
+  },
+  "review": {
+    "skills_base_branch": "master",
+    "skills_branch_prefix": "upkeep/",
+    "failures_shown": 10,
+    "sort_model": "sonnet",
+    "sort_batch_items": 12,
+    "sort_batch_chars": 200000,
+    "sort_field_chars": 3000,
+    "sort_reason_max_chars": 300,
+    "sort_option_max_chars": 120
+  },
+  "review_server": {
+    "token_bytes": 32,
+    "max_body_bytes": 1048576,
+    "max_note_chars": 4000,
+    "max_page_note_chars": 8000,
+    "heartbeat_seconds": 20,
+    "send_poll_seconds": 3,
+    "page_gone_seconds": 300,
+    "idle_limit_seconds": 7200,
+    "close_grace_seconds": 5,
+    "start_timeout_seconds": 20,
+    "stop_timeout_seconds": 15,
+    "start_lock_stale_seconds": 60,
+    "watchdog_seconds": 1,
+    "request_timeout_seconds": 30,
+    "wait_poll_seconds": 1
+  },
+  "monthly": {
+    "global_claude_file": "~/.claude/CLAUDE.md",
+    "global_rules_dir": "~/.claude/rules",
+    "coherence_model": "opus",
+    "duplicates_model": "sonnet",
+    "quality_model": "sonnet",
+    "description_model": "sonnet",
+    "group_chars": 400000,
+    "import_max_hops": 4,
+    "index_lines_loaded": 200,
+    "index_bytes_loaded": 25000,
+    "duplicate_cosine_min": 0.3,
+    "duplicate_cluster_max_members": 8,
+    "duplicate_section_min_words": 8,
+    "quote_min_chars": 8,
+    "quality_min_weeks": 4,
+    "tunable_settings": [
+      "weekly.recurrence_sessions", "weekly.costly_once_tool_calls", "weekly.failure_min_commands_lost",
+      "weekly.max_deletions_per_pass", "ledger.direct_against_entries", "ledger.inferred_against_entries",
+      "ledger.inferred_window_days"
+    ],
+    "replacement_skills_per_month": 3,
+    "skill_opening_chars": 2000,
+    "setting_fact_keys": ["attribution", "includeCoAuthoredBy"],
+    "public_project_names": ["projects", "skills", "Documents", "Desktop", "Downloads", "upkeep", "run", "review", "temp", "gui", "experiment", "wiki", "scratch", ".claude"],
+    "context_largest_shown": 8,
+    "chars_per_token_estimate": 4
+  }
+}

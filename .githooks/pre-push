@@ -1,0 +1,19 @@
+#!/bin/sh
+# Refuses to push commits whose author or committer email is not a noreply address.
+root=$(git rev-parse --show-toplevel) || exit 1
+scan="$root/.githooks/pii-scan.sh"
+remote=$1
+zero=0000000000000000000000000000000000000000
+rc=0
+while read -r lref lsha rref rsha; do
+    [ "$lsha" = "$zero" ] && continue
+    if [ "$rsha" = "$zero" ]; then
+        sh "$scan" commits "$lsha" --not --remotes="$remote" || rc=1
+    else
+        sh "$scan" commits "$rsha..$lsha" || rc=1
+    fi
+done
+if [ $rc -ne 0 ]; then
+    echo "pre-push: push rejected (commit identity is not a noreply address)." >&2
+fi
+exit $rc

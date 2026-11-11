@@ -1,0 +1,20 @@
+# Archives
+*.zip
+
+# Backup folders
+*backup*/
+
+# Python bytecode
+__pycache__/
+
+# Claude-managed sync of built-in skills (regenerated automatically)
+synced/
+
+# Hook runtime logs (session-colocate writes its log next to the script)
+hooks/*/*.log
+
+# Claude Code per-machine permissions: may hold secrets from approved commands
+**/.claude/settings.local.json
+
+# Per-machine personal-data terms for the pre-commit hook (one per line)
+.githooks/denylist.local

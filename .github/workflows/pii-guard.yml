@@ -1,0 +1,15 @@
+name: pii-guard
+on:
+  push:
+  pull_request:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan tracked files for emails and machine paths
+        run: sh .githooks/pii-scan.sh tree
+      - name: Check author and committer emails of all commits
+        run: sh .githooks/pii-scan.sh commits HEAD

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Blocks commits that add personal data (see .githooks/pii-scan.sh and the README).
+root=$(git rev-parse --show-toplevel) || exit 1
+scan="$root/.githooks/pii-scan.sh"
+rc=0
+sh "$scan" ident "$(git var GIT_AUTHOR_IDENT)" || rc=1
+sh "$scan" ident "$(git var GIT_COMMITTER_IDENT)" || rc=1
+sh "$scan" staged || rc=1
+if [ $rc -ne 0 ]; then
+    echo "pre-commit: commit rejected. Never bypass with --no-verify." >&2
+fi
+exit $rc

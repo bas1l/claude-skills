@@ -1,0 +1,177 @@
+{
+  "_comment": "Merged into ~/.claude/settings.json by install.ps1. Each top-level key under 'settings' is set in settings.json, except 'env', which is merged key by key (template keys win; other keys already in settings.json are kept); each event under 'hooks' REPLACES that event in settings.json; keys and events not listed are left alone. Placeholders: {{PYTHON}} = python.exe, {{CLAUDE_DIR}} = ~/.claude (forward slashes).",
+  "settings": {
+    "cleanupPeriodDays": 36500,
+    "env": {
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+      "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/subagent-model/subagent_model.py"
+            ],
+            "timeout": 10,
+            "statusMessage": "Assigning subagent model"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -Command \"(New-Object System.Media.SoundPlayer \\\"$env:windir\\Media\\Windows Proximity Notification.wav\\\").PlaySync()\"",
+            "timeout": 10,
+            "statusMessage": "Notification sound"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/session-colocate/session_colocate.py"
+            ],
+            "timeout": 30,
+            "statusMessage": "Co-locating session temp data"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File {{CLAUDE_DIR}}/hooks/brainstorm-session-start.ps1",
+            "timeout": 10,
+            "statusMessage": "Offering to brainstorm"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/upkeep_status/upkeep_status.py"
+            ],
+            "timeout": 5,
+            "statusMessage": "Checking upkeep runs"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/keepwarm-12h/keepwarm_12h.py"
+            ],
+            "timeout": 10,
+            "statusMessage": "Keeping keepwarm at 12h"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/voice-latch-trigger/voice_latch_trigger.py"
+            ],
+            "timeout": 30,
+            "statusMessage": "Voice latch trigger"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_switch.py\"",
+            "timeout": 10,
+            "statusMessage": "TL;DR gate switch"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/msg-clock/msg_clock.py\" prompt",
+            "timeout": 10,
+            "statusMessage": "Message clock"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File {{CLAUDE_DIR}}/hooks/open-html-docx.ps1",
+            "timeout": 10,
+            "statusMessage": "Opening HTML/DOCX"
+          }
+        ]
+      }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}}",
+            "args": [
+              "{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_display.py"
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/tldr-gate/tldr_gate.py\"",
+            "timeout": 10,
+            "statusMessage": "TL;DR gate"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{CLAUDE_DIR}}/skills/hooks/msg-clock/msg_clock.py\" reply",
+            "timeout": 10,
+            "statusMessage": "Message clock"
+          }
+        ]
+      }
+    ]
+  }
+}
